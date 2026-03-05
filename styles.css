@@ -1513,3 +1513,99 @@ body {
 .confirm-btn-ok {
   color: #fff;
 }
+
+/* ===== Upload row: 2-column layout ===== */
+.uploads-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.uploads-row__col {
+  flex: 1;
+  min-width: 0;
+}
+.uploads-row__col.hidden {
+  display: none;
+}
+.uploads-row__area {
+  height: 120px;
+}
+.uploads-row__area .images-thumbs,
+.uploads-row__area .images-add-cell {
+  height: 100%;
+}
+.uploads-row__area .images-add-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ===== Video Generation extras ===== */
+.grid-item-video {
+  background: var(--bg-elevated);
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+}
+.grid-item-video::before {
+  content: '';
+  display: block;
+  padding-top: 100%;
+}
+.video-thumb-bg {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #1a1a2e 0%, #252538 100%);
+}
+.video-thumb-play-icon {
+  font-size: 2rem;
+  color: var(--accent-mid);
+  filter: drop-shadow(0 0 8px var(--shadow-orange));
+  opacity: 0.9;
+  transition: transform 0.2s, opacity 0.2s;
+}
+.grid-item-video:hover .video-thumb-play-icon,
+.grid-item-video:active .video-thumb-play-icon {
+  transform: scale(1.2);
+  opacity: 1;
+}
+.preview-video {
+  width: 100%;
+  max-height: 60vh;
+  border-radius: var(--radius);
+  background: #000;
+  outline: none;
+  display: block;
+}
+.preview-video.hidden { display: none; }
+.preview-image.hidden { display: none; }
+.video-ref-thumb {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px 12px;
+  min-width: 80px;
+  min-height: 80px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  position: relative;
+}
+.video-ref-icon {
+  font-size: 1.6rem;
+  color: var(--accent-mid);
+  line-height: 1;
+}
+.video-ref-name {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  text-align: center;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

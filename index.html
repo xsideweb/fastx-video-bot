@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="theme-color" content="#1a1a2e">
-  <title>Xside AI — Генерация изображений</title>
+  <title>Xside AI — Генерация видео</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <link rel="stylesheet" href="styles.css">
   <script>window.__APP_CONFIG__=window.__APP_CONFIG__||{apiBase:''};</script>
@@ -17,7 +17,7 @@
         <img src="icons/logo.png" alt="FastX logo" class="icon logo-icon">
         <div class="logo-text-wrap">
           <span class="logo-text">FastX</span>
-          <span class="logo-subtitle">with Nano Banana</span>
+          <span class="logo-subtitle">Video Generation</span>
         </div>
       </div>
       <div class="header-right">
@@ -31,84 +31,130 @@
     <!-- Screen: Create -->
     <main id="screen-create" class="screen active">
       <section class="prompt-section">
+
+        <!-- Model selection -->
         <div class="model-switch">
           <div class="model-switch-buttons">
-            <button type="button" class="model-option neumorph-btn model-option-active" data-model="nano">Nano Banana</button>
-            <button type="button" class="model-option neumorph-btn" data-model="nano-2">Nano Banana 2</button>
-            <button type="button" class="model-option neumorph-btn" data-model="nano-pro">Nano Banana Pro</button>
+            <button type="button" class="model-option neumorph-btn model-option-active" data-model="kling-img2vid">Image → Video</button>
+            <button type="button" class="model-option neumorph-btn" data-model="kling-motion">Motion Control</button>
+            <button type="button" class="model-option neumorph-btn" data-model="kling-video">Kling 3.0</button>
           </div>
         </div>
+
+        <!-- Prompt -->
         <div class="prompt-wrapper neumorph-inset">
-          <textarea id="prompt-input" class="prompt-input" placeholder="Что хотите сгенерировать? (например: Киберпанк-банан на неоновом байке)" rows="3"></textarea>
+          <textarea id="prompt-input" class="prompt-input" placeholder="Опишите видео (например: Кот скачет по радуге в киберпанк-городе)" rows="3"></textarea>
           <button type="button" class="icon-btn voice-btn" aria-label="Голосовой ввод"><img src="icons/microphone.svg" alt="" class="icon icon-btn-inner"></button>
         </div>
+
+        <!-- Options -->
         <div class="prompt-options">
-          <label class="select-label" id="quality-wrap">
+          <!-- Duration: kling-img2vid + kling-video -->
+          <label class="select-label" id="duration-wrap">
+            <span class="select-label-text">Длительность</span>
+            <select id="select-duration" class="select neumorph-inset" aria-label="Длительность видео">
+              <option value="5" selected>5 сек</option>
+              <option value="10">10 сек</option>
+            </select>
+          </label>
+          <!-- Sound: kling-img2vid + kling-video -->
+          <label class="select-label" id="sound-wrap">
+            <span class="select-label-text">Звук</span>
+            <select id="select-sound" class="select neumorph-inset" aria-label="Звук в видео">
+              <option value="false" selected>Без звука</option>
+              <option value="true">Со звуком</option>
+            </select>
+          </label>
+          <!-- Resolution: kling-motion -->
+          <label class="select-label hidden" id="motion-mode-wrap">
+            <span class="select-label-text">Разрешение</span>
+            <select id="select-motion-mode" class="select neumorph-inset" aria-label="Разрешение видео">
+              <option value="720p" selected>720p</option>
+              <option value="1080p">1080p</option>
+            </select>
+          </label>
+          <!-- Orientation: kling-motion -->
+          <label class="select-label hidden" id="orientation-wrap">
+            <span class="select-label-text">Ориентация</span>
+            <select id="select-orientation" class="select neumorph-inset" aria-label="Ориентация персонажа">
+              <option value="video" selected>По видео</option>
+              <option value="image">По картинке</option>
+            </select>
+          </label>
+          <!-- Quality: kling-video -->
+          <label class="select-label hidden" id="video-quality-wrap">
             <span class="select-label-text">Качество</span>
-            <select id="select-quality" class="select neumorph-inset" aria-label="Качество">
-              <option value="1" selected>1K</option>
-              <option value="2">2K</option>
-              <option value="4">4K</option>
+            <select id="select-video-quality" class="select neumorph-inset" aria-label="Качество видео">
+              <option value="std" selected>Стандарт</option>
+              <option value="pro">Pro HD</option>
             </select>
           </label>
-          <label class="select-label">
-            <span class="select-label-text">Соотношение</span>
-            <select id="select-aspect" class="select neumorph-inset" aria-label="Соотношение сторон">
-              <option value="1:1" selected>1:1</option>
-              <option value="4:3">4:3</option>
-              <option value="3:4">3:4</option>
-              <option value="16:9">16:9</option>
-              <option value="9:16">9:16</option>
-            </select>
-          </label>
-          <label class="select-label">
+          <!-- Aspect: kling-video -->
+          <label class="select-label hidden" id="video-aspect-wrap">
             <span class="select-label-text">Формат</span>
-            <select id="select-format" class="select neumorph-inset" aria-label="Формат фото">
-              <option value="png" selected>PNG</option>
-              <option value="jpeg">JPEG</option>
-              <option value="webp">WebP</option>
+            <select id="select-video-aspect" class="select neumorph-inset" aria-label="Соотношение сторон">
+              <option value="16:9" selected>16:9</option>
+              <option value="9:16">9:16</option>
+              <option value="1:1">1:1</option>
             </select>
           </label>
         </div>
-        <!-- Загрузка изображений (необязательно) — одна маленькая область выше кнопки -->
-        <section class="images-upload-section">
-          <div class="images-upload-header">
-            <h3 class="images-upload-title">ИЗОБРАЖЕНИЯ (НЕОБЯЗАТЕЛЬНО)</h3>
-            <span class="images-upload-rules">до 8 шт. JPG/PNG • ≤ 10 МБ</span>
-          </div>
-          <input type="file" id="images-file-input" class="images-file-input" accept="image/jpeg,image/png" multiple hidden>
-          <div id="images-upload-area" class="images-upload-area">
-            <div id="images-thumbs" class="images-thumbs grid grid-3">
-              <!-- Одна ячейка «Добавить» или превью + «Добавить» из JS -->
+
+        <!-- Upload row: image + video side by side -->
+        <div class="uploads-row">
+          <!-- Reference image upload -->
+          <section class="images-upload-section uploads-row__col" id="images-upload-section">
+            <div class="images-upload-header">
+              <h3 class="images-upload-title" id="images-upload-title">ОПОРНОЕ ИЗОБРАЖЕНИЕ</h3>
+              <span class="images-upload-rules" id="images-upload-rules">JPG/PNG • ≤ 10 МБ</span>
             </div>
-          </div>
-          <div class="images-upload-footer">
-            <span id="images-counter" class="images-counter">0/8</span>
-          </div>
-        </section>
-        <!-- Progress bar (shown during generation) -->
+            <input type="file" id="images-file-input" class="images-file-input" accept="image/jpeg,image/png" multiple hidden>
+            <div id="images-upload-area" class="images-upload-area uploads-row__area">
+              <div id="images-thumbs" class="images-thumbs grid grid-3"></div>
+            </div>
+            <div class="images-upload-footer">
+              <span id="images-counter" class="images-counter">0/1</span>
+            </div>
+          </section>
+
+          <!-- Reference video upload (kling-motion only) -->
+          <section class="images-upload-section uploads-row__col hidden" id="video-upload-section">
+            <div class="images-upload-header">
+              <h3 class="images-upload-title">РЕФЕРЕНС ВИДЕО</h3>
+              <span class="images-upload-rules">MP4/MOV • ≤ 100 МБ • 3–30 сек</span>
+            </div>
+            <input type="file" id="video-file-input" class="images-file-input" accept="video/mp4,video/quicktime,video/x-matroska" hidden>
+            <div id="video-upload-area" class="images-upload-area uploads-row__area">
+              <div id="video-thumbs" class="images-thumbs"></div>
+            </div>
+          </section>
+        </div>
+
+        <!-- Progress bar -->
         <div id="progress-wrap" class="progress-wrap hidden">
           <div class="progress-bar neumorph-inset">
             <div id="progress-fill" class="progress-fill"></div>
           </div>
-          <span id="progress-text" class="progress-text">Генерация...</span>
+          <span id="progress-text" class="progress-text">Генерация видео...</span>
         </div>
+
+        <!-- Generate button -->
         <button type="button" id="btn-generate" class="btn-generate neumorph-btn gradient-premium">
-          <span id="btn-generate-label"></span>
+          <span id="btn-generate-label">Сгенерировать</span>
           <span id="generate-cost" class="btn-generate-cost">
             <img src="icons/token.svg" alt="" class="icon icon-generate-cost">
-            <span id="generate-cost-value">10</span>
+            <span id="generate-cost-value">30</span>
           </span>
         </button>
       </section>
+
+      <!-- Recent generations -->
       <section class="recent-section">
         <div class="recent-header">
           <h2 class="recent-title">Последние генерации</h2>
           <button type="button" id="view-all" class="link-btn">Все</button>
         </div>
-        <div id="recent-grid" class="grid grid-3">
-          <!-- Filled by JS; placeholder items for initial render -->
-        </div>
+        <div id="recent-grid" class="grid grid-3"></div>
       </section>
     </main>
 
@@ -117,10 +163,8 @@
       <div class="gallery-header">
         <h2 class="gallery-title">Галерея</h2>
       </div>
-      <div id="gallery-grid" class="grid grid-3 gallery-grid">
-        <!-- Filled by JS -->
-      </div>
-      <p id="gallery-empty" class="gallery-empty hidden">Пока нет изображений. Создайте первое на вкладке «Создать».</p>
+      <div id="gallery-grid" class="grid grid-3 gallery-grid"></div>
+      <p id="gallery-empty" class="gallery-empty hidden">Пока нет видео. Создайте первое на вкладке «Создать».</p>
     </main>
 
     <!-- Screen: Profile -->
@@ -129,13 +173,14 @@
         <p id="profile-nickname" class="profile-nickname">Пользователь</p>
         <div class="balance-title">Актуальный баланс:</div>
         <div class="profile-balance">
-          <img src="icons/token.svg" alt="" class="icon icon-credits-inline"><span id="profile-credits" class="profile-credits">0</span> 
-          <span id="profile-generations-hint" class="profile-generations-hint">(≈ 0 генераций)</span>
+          <img src="icons/token.svg" alt="" class="icon icon-credits-inline">
+          <span id="profile-credits" class="profile-credits">0</span>
+          <span id="profile-generations-hint" class="profile-generations-hint">(≈ 0 видео)</span>
         </div>
         <div class="profile-actions">
-          <button type="button" class="profile-test-btn neumorph-btn gradient-premium" id="profile-btn-test-2"> <img src="icons/card.svg" alt="" class="icon icon-btn-sm"> Купить токены</button>
+          <button type="button" class="profile-test-btn neumorph-btn gradient-premium" id="profile-btn-test-2"><img src="icons/card.svg" alt="" class="icon icon-btn-sm"> Купить токены</button>
           <button type="button" class="profile-test-btn neumorph-btn gradient-premium" id="profile-btn-topup-stars"><img src="icons/star.svg" alt="" class="icon icon-btn-sm"> Пополнение через Stars</button>
-          <button type="button" class="profile-test-btn neumorph-btn gradient-premium" id="profile-btn-test-3"><img src="icons/bitcoin-circle.svg" alt="" class="icon icon-btn-sm "> Пополнение через криптовалюту</button>
+          <button type="button" class="profile-test-btn neumorph-btn gradient-premium" id="profile-btn-test-3"><img src="icons/bitcoin-circle.svg" alt="" class="icon icon-btn-sm"> Пополнение через криптовалюту</button>
         </div>
         <div id="topup-packs-overlay" class="topup-packs-overlay hidden" aria-hidden="true">
           <div class="topup-packs-backdrop"></div>
@@ -148,12 +193,12 @@
         <section class="profile-favorites-section">
           <h3 class="profile-favorites-title">Избранные промпты</h3>
           <div id="profile-favorites-list" class="profile-favorites-list"></div>
-          <p id="profile-favorites-empty" class="profile-favorites-empty hidden">Добавляйте промпты из превью картинки (★).</p>
+          <p id="profile-favorites-empty" class="profile-favorites-empty hidden">Добавляйте промпты из превью видео (★).</p>
         </section>
       </section>
     </main>
 
-    <!-- Preview overlay (zoom) -->
+    <!-- Preview overlay -->
     <div id="preview-overlay" class="preview-overlay hidden">
       <div class="preview-backdrop"></div>
       <div class="preview-content">
@@ -162,7 +207,8 @@
         </div>
         <button type="button" class="preview-close" aria-label="Закрыть">×</button>
         <div class="preview-image-wrap">
-          <img id="preview-image" src="" alt="Превью" class="preview-image" decoding="async">
+          <img id="preview-image" src="" alt="Превью" class="preview-image hidden" decoding="async">
+          <video id="preview-video" class="preview-video hidden" controls playsinline preload="metadata"></video>
           <div id="preview-image-buttons" class="preview-image-buttons hidden">
             <button type="button" id="btn-preview-favorite-on-image" class="preview-on-image-btn" aria-label="В избранное"><img src="icons/star.svg" alt="" class="icon"></button>
             <button type="button" id="btn-preview-copy-on-image" class="preview-on-image-btn" aria-label="Копировать промпт"><img src="icons/copy.svg" alt="" class="icon"></button>
@@ -176,7 +222,7 @@
       </div>
     </div>
 
-    <!-- Боковое меню (профиль) -->
+    <!-- Side menu -->
     <div id="menu-overlay" class="menu-overlay hidden" aria-hidden="true">
       <div class="menu-backdrop"></div>
       <div class="menu-panel">
@@ -189,8 +235,7 @@
             </p>
           </div>
         </div>
-        <button type="button" id="menu-btn-topup" class="menu-btn-topup neumorph-btn gradient-premium">
-          Купить токены</button>
+        <button type="button" id="menu-btn-topup" class="menu-btn-topup neumorph-btn gradient-premium">Купить токены</button>
       </div>
     </div>
 

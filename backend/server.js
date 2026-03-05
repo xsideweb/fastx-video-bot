@@ -1,801 +1,380 @@
-/**
- * Backend for Xside AI Mini App — Nano Banana image generation
- * POST /api/generate, GET /api/image/:id, POST /api/callback, GET /api/task/:taskId, GET /api/gallery
+﻿/**
+ * Backend for Xside AI Mini App — Video Generation
+ * Models: kling-2.6/image-to-video, kling-2.6/motion-control, kling-3.0/video
  */
 
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const multer = require('multer');
-const path = require('path');
-const sharp = require('sharp');
-const { v4: uuidv4 } = require('uuid');
-const { Pool } = require('pg');
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+const multer = require("multer");
+const path = require("path");
+const sharp = require("sharp");
+const { v4: uuidv4 } = require("uuid");
+const { Pool } = require("pg");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
+const BASE_URL = (process.env.BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, "");
 
-// In-memory stores
-const imageStore = new Map(); // id -> { buffer, mimeType }
-const taskMeta = new Map();   // taskId -> { userId, prompt, createdAt, modelKey?, aspect?, format? }
-const taskResults = new Map(); // taskId -> { successFlag, resultImageUrl?, errorMessage?, galleryItem? }
+const mediaStore = new Map();
+const taskMeta   = new Map();
+const taskResults = new Map();
 
-// PostgreSQL pool
 const DB_URL = process.env.DATABASE_URL || process.env.database_url;
 const pool = new Pool({
   connectionString: DB_URL,
-  ssl: process.env.DATABASE_SSL === 'false' ? false : { rejectUnauthorized: false },
+  ssl: process.env.DATABASE_SSL === "false" ? false : { rejectUnauthorized: false },
 });
 
-// Multer: memory storage for multipart images
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    const ok = ['image/jpeg', 'image/png'].includes(file.mimetype);
-    cb(null, !!ok);
+  limits: { fileSize: 100 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = [
+      "image/jpeg","image/png","image/webp",
+      "video/mp4","video/quicktime","video/x-matroska",
+    ];
+    cb(null, allowed.includes(file.mimetype));
   },
 });
 
 app.use(cors());
-app.use(express.json({ limit: '20mb' }));
-
-// Static: serve frontend from parent directory (optional, for single deploy)
-const publicDir = path.join(__dirname, '..');
+app.use(express.json({ limit: "20mb" }));
+const publicDir = path.join(__dirname, "..");
 app.use(express.static(publicDir));
 
-// ——— GET /api/image/:id ———
-// KIE запрашивает изображения по URL асинхронно; не удаляем сразу, даём 2 мин на повторные запросы
-const IMAGE_TTL_MS = 2 * 60 * 1000;
-
-app.get('/api/image/:id', (req, res) => {
-  const { id } = req.params;
-  const entry = imageStore.get(id);
-  if (!entry) {
-    return res.status(404).json({ error: 'Image not found' });
-  }
-  res.set('Content-Type', entry.mimeType || 'image/png');
+const MEDIA_TTL_MS = 5 * 60 * 1000;
+app.get("/api/image/:id", (req, res) => {
+  const entry = mediaStore.get(req.params.id);
+  if (!entry) return res.status(404).json({ error: "Not found" });
+  res.set("Content-Type", entry.mimeType || "application/octet-stream");
   res.send(entry.buffer);
-  setTimeout(() => imageStore.delete(id), IMAGE_TTL_MS);
+  setTimeout(() => mediaStore.delete(req.params.id), MEDIA_TTL_MS);
 });
 
-// ——— GET /api/thumb ———
-// Миниатюра 256x256 для сеток Recent / Gallery
-app.get('/api/thumb', async (req, res) => {
+app.get("/api/thumb", async (req, res) => {
   const rawUrl = req.query.url;
-  if (!rawUrl || typeof rawUrl !== 'string') {
-    return res.status(400).json({ error: 'Missing url' });
-  }
-  if (!rawUrl.startsWith('https://')) {
-    return res.status(400).json({ error: 'Invalid url' });
-  }
+  if (!rawUrl || !rawUrl.startsWith("https://")) return res.status(400).json({ error: "Invalid url" });
   try {
-    const r = await fetch(rawUrl, { redirect: 'follow' });
-    if (!r.ok) return res.status(502).json({ error: 'Failed to fetch image' });
+    const r = await fetch(rawUrl, { redirect: "follow" });
+    if (!r.ok) return res.status(502).json({ error: "Failed to fetch" });
     const buf = Buffer.from(await r.arrayBuffer());
-    const ctype = r.headers.get('content-type') || 'image/png';
-    try {
-      const out = await sharp(buf)
-        .resize(256, 256, { fit: 'inside', withoutEnlargement: true })
-        .toBuffer();
-      res.set('Content-Type', ctype);
-      res.set('Content-Disposition', 'inline');
-      res.set('Cache-Control', 'public, max-age=86400, immutable');
-      res.send(out);
-    } catch (sharpErr) {
-      res.set('Content-Type', ctype);
-      res.set('Content-Disposition', 'inline');
-      res.set('Cache-Control', 'public, max-age=86400, immutable');
-      res.send(buf);
+    const ctype = r.headers.get("content-type") || "application/octet-stream";
+    if (ctype.startsWith("video/")) {
+      res.set("Content-Type", ctype);
+      res.set("Cache-Control", "public, max-age=86400, immutable");
+      return res.send(buf);
     }
-  } catch (e) {
-    res.status(502).json({ error: 'Failed to fetch image' });
-  }
+    try {
+      const out = await sharp(buf).resize(256, 256, { fit: "inside", withoutEnlargement: true }).toBuffer();
+      res.set("Content-Type", ctype);
+      res.set("Content-Disposition", "inline");
+      res.set("Cache-Control", "public, max-age=86400, immutable");
+      return res.send(out);
+    } catch { res.set("Content-Type", ctype); res.set("Cache-Control", "public, max-age=86400, immutable"); return res.send(buf); }
+  } catch { res.status(502).json({ error: "Failed to fetch" }); }
 });
 
-// ——— GET /api/view ———
-// Прокси для просмотра: отдаёт картинку с Content-Disposition: inline. Опционально ресайз через w, h.
-app.get('/api/view', async (req, res) => {
+app.get("/api/view", async (req, res) => {
   const rawUrl = req.query.url;
-  if (!rawUrl || typeof rawUrl !== 'string') {
-    return res.status(400).json({ error: 'Missing url' });
-  }
-  if (!rawUrl.startsWith('https://')) {
-    return res.status(400).json({ error: 'Invalid url' });
-  }
-  const w = parseInt(req.query.w, 10);
-  const h = parseInt(req.query.h, 10);
+  if (!rawUrl || !rawUrl.startsWith("https://")) return res.status(400).json({ error: "Invalid url" });
+  const w = parseInt(req.query.w, 10), h = parseInt(req.query.h, 10);
   const needResize = (w > 0 && w <= 4096) || (h > 0 && h <= 4096);
   try {
-    const r = await fetch(rawUrl, { redirect: 'follow' });
-    if (!r.ok) return res.status(502).json({ error: 'Failed to fetch image' });
+    const r = await fetch(rawUrl, { redirect: "follow" });
+    if (!r.ok) return res.status(502).json({ error: "Failed to fetch" });
     const buf = Buffer.from(await r.arrayBuffer());
-    const ctype = r.headers.get('content-type') || 'image/png';
-    if (needResize) {
+    const ctype = r.headers.get("content-type") || "application/octet-stream";
+    if (needResize && !ctype.startsWith("video/")) {
       try {
-        const width = w > 0 ? w : null;
-        const height = h > 0 ? h : null;
-        const out = await sharp(buf)
-          .resize(width, height, { fit: 'inside', withoutEnlargement: true })
-          .toBuffer();
-        res.set('Content-Type', ctype);
-        res.set('Content-Disposition', 'inline');
-        res.set('Cache-Control', 'public, max-age=3600');
-        res.send(out);
-      } catch (sharpErr) {
-        res.set('Content-Type', ctype);
-        res.set('Content-Disposition', 'inline');
-        res.set('Cache-Control', 'public, max-age=3600');
-        res.send(buf);
-      }
-    } else {
-      res.set('Content-Type', ctype);
-      res.set('Content-Disposition', 'inline');
-      res.set('Cache-Control', 'public, max-age=3600');
-      res.send(buf);
+        const out = await sharp(buf).resize(w > 0 ? w : null, h > 0 ? h : null, { fit: "inside", withoutEnlargement: true }).toBuffer();
+        res.set("Content-Type", ctype); res.set("Content-Disposition", "inline"); res.set("Cache-Control", "public, max-age=3600"); return res.send(out);
+      } catch { /* fall through */ }
     }
-  } catch (e) {
-    res.status(502).json({ error: 'Failed to fetch image' });
-  }
+    res.set("Content-Type", ctype); res.set("Content-Disposition", "inline"); res.set("Cache-Control", "public, max-age=3600"); res.send(buf);
+  } catch { res.status(502).json({ error: "Failed to fetch" }); }
 });
 
-// ——— GET /api/download ———
-// Прокси для скачивания: отдаёт картинку с Content-Disposition: attachment для Telegram.downloadFile
-app.get('/api/download', async (req, res) => {
-  const rawUrl = req.query.url;
-  const filename = req.query.filename || 'image.png';
-  if (!rawUrl || typeof rawUrl !== 'string') {
-    return res.status(400).json({ error: 'Missing url' });
-  }
-  if (!rawUrl.startsWith('https://')) {
-    return res.status(400).json({ error: 'Invalid url' });
-  }
+app.get("/api/download", async (req, res) => {
+  const rawUrl = req.query.url, filename = req.query.filename || "video.mp4";
+  if (!rawUrl || !rawUrl.startsWith("https://")) return res.status(400).json({ error: "Invalid url" });
   try {
-    const r = await fetch(rawUrl, { redirect: 'follow' });
-    if (!r.ok) return res.status(502).json({ error: 'Failed to fetch image' });
+    const r = await fetch(rawUrl, { redirect: "follow" });
+    if (!r.ok) return res.status(502).json({ error: "Failed to fetch" });
     const buf = Buffer.from(await r.arrayBuffer());
-    const ctype = r.headers.get('content-type') || 'image/png';
-    res.set('Content-Type', ctype);
-    res.set('Content-Disposition', `attachment; filename="${filename.replace(/"/g, '%22')}"`);
+    res.set("Content-Type", r.headers.get("content-type") || "video/mp4");
+    res.set("Content-Disposition", `attachment; filename="${filename.replace(/"/g, "%22")}"`);
     res.send(buf);
-  } catch (e) {
-    res.status(502).json({ error: 'Failed to fetch image' });
-  }
+  } catch { res.status(502).json({ error: "Failed to fetch" }); }
 });
 
-// ——— POST /api/callback (KIE playground webhook for nano-banana) ———
-app.post('/api/callback', async (req, res) => {
+app.post("/api/callback", async (req, res) => {
   const { code, msg, data } = req.body || {};
   const taskId = data?.taskId;
-  if (!taskId) {
-    return res.status(400).json({ error: 'Missing taskId' });
-  }
-
-  let resultImageUrl;
-  if (typeof data?.resultJson === 'string') {
+  if (!taskId) return res.status(400).json({ error: "Missing taskId" });
+  let resultUrl;
+  if (typeof data?.resultJson === "string") {
     try {
       const parsed = JSON.parse(data.resultJson);
-      const urls = parsed.resultUrls || parsed.urls || parsed.images || [];
-      if (Array.isArray(urls) && urls.length > 0) {
-        resultImageUrl = urls[0];
-      }
-    } catch (e) {
-      // ignore JSON parse errors, will be treated as missing result
-    }
+      const urls = parsed.resultUrls || parsed.urls || parsed.videos || parsed.images || [];
+      if (Array.isArray(urls) && urls.length > 0) resultUrl = urls[0];
+    } catch { /* ignore */ }
   }
-
-  const state = data?.state;
-  const successFlag = code === 200 && state === 'success' ? 1 : 3;
-  const errorMessage = data?.failMsg || msg || (successFlag !== 1 ? 'Generation failed' : '');
-
+  const successFlag = code === 200 && data?.state === "success" ? 1 : 3;
+  const errorMessage = data?.failMsg || msg || (successFlag !== 1 ? "Generation failed" : "");
   let galleryItem;
-
-  if (successFlag === 1 && resultImageUrl) {
+  if (successFlag === 1 && resultUrl) {
     const meta = taskMeta.get(taskId);
     if (meta?.userId != null) {
-      const id = uuidv4();
-      const createdAt = new Date(meta.createdAt || Date.now());
-      galleryItem = {
-        id,
-        userId: meta.userId,
-        url: resultImageUrl,
-        prompt: meta.prompt || '',
-        createdAt: createdAt.getTime(),
-      };
-
+      const id = uuidv4(), createdAt = new Date(meta.createdAt || Date.now());
+      galleryItem = { id, url: resultUrl, prompt: meta.prompt || "", createdAt: createdAt.getTime(), mediaType: "video" };
       try {
         await pool.query(
-          `INSERT INTO generations (id, user_id, url, prompt, model, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [
-            id,
-            String(meta.userId),
-            resultImageUrl,
-            meta.prompt || '',
-            meta.modelKey || null,
-            createdAt,
-          ]
+          "INSERT INTO generations (id, user_id, url, prompt, model, media_type, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+          [id, String(meta.userId), resultUrl, meta.prompt || "", meta.modelKey || null, "video", createdAt]
         );
-      } catch (e) {
-        console.error('Failed to insert gallery item:', e.message);
-      }
+      } catch (e) { console.error("Failed to insert gallery item:", e.message); }
     }
   }
-
-  taskResults.set(taskId, {
-    successFlag,
-    resultImageUrl: resultImageUrl || undefined,
-    errorMessage: errorMessage || undefined,
-    galleryItem: galleryItem
-      ? { id: galleryItem.id, url: galleryItem.url, prompt: galleryItem.prompt, createdAt: galleryItem.createdAt }
-      : undefined,
-  });
-
+  taskResults.set(taskId, { successFlag, resultUrl: resultUrl || undefined, errorMessage: errorMessage || undefined, galleryItem });
   taskMeta.delete(taskId);
-  res.status(200).json({ status: 'received' });
+  res.status(200).json({ status: "received" });
 });
 
-// ——— GET /api/task/:taskId ———
-app.get('/api/task/:taskId', (req, res) => {
-  const { taskId } = req.params;
-  const result = taskResults.get(taskId);
-
-  // Если результата ещё нет (ждём callback от KIE) — сообщаем фронту, что генерация продолжается
-  if (!result) {
-    return res.json({ successFlag: 0 });
-  }
-
-  res.json({
-    successFlag: result.successFlag,
-    resultImageUrl: result.resultImageUrl,
-    errorMessage: result.errorMessage,
-    galleryItem: result.galleryItem,
-  });
+app.get("/api/task/:taskId", (req, res) => {
+  const result = taskResults.get(req.params.taskId);
+  if (!result) return res.json({ successFlag: 0 });
+  res.json({ successFlag: result.successFlag, resultUrl: result.resultUrl, errorMessage: result.errorMessage, galleryItem: result.galleryItem });
 });
 
-// ——— GET /api/gallery ———
-app.get('/api/gallery', async (req, res) => {
+app.get("/api/gallery", async (req, res) => {
   const userId = req.query.userId;
-  if (userId === undefined || userId === '') {
-    return res.json([]);
-  }
+  if (!userId) return res.json([]);
   try {
     const result = await pool.query(
-      `SELECT id, url, prompt, created_at
-       FROM generations
-       WHERE user_id = $1
-       ORDER BY created_at DESC
-       LIMIT 200`,
+      "SELECT id, url, prompt, media_type, created_at FROM generations WHERE user_id=$1 ORDER BY created_at DESC LIMIT 200",
       [String(userId)]
     );
-    const list = result.rows.map((row) => ({
-      id: row.id,
-      url: row.url,
-      prompt: row.prompt,
-      createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
-    }));
-    res.json(list);
-  } catch (e) {
-    console.error('Failed to load gallery:', e.message);
-    res.status(500).json({ error: 'Failed to load gallery' });
-  }
+    res.json(result.rows.map(row => ({ id: row.id, url: row.url, prompt: row.prompt, mediaType: row.media_type || "video", createdAt: row.created_at ? new Date(row.created_at).getTime() : null })));
+  } catch (e) { console.error(e.message); res.status(500).json({ error: "Failed to load gallery" }); }
 });
 
-// ——— DELETE /api/gallery ———
-app.delete('/api/gallery', async (req, res) => {
-  const userId = req.body?.userId;
-  const id = req.body?.id;
-  if (!userId || !id || typeof id !== 'string') {
-    return res.status(400).json({ error: 'Missing userId or id' });
-  }
+app.delete("/api/gallery", async (req, res) => {
+  const { userId, id } = req.body || {};
+  if (!userId || !id) return res.status(400).json({ error: "Missing userId or id" });
   try {
-    const result = await pool.query(
-      `DELETE FROM generations WHERE id = $1 AND user_id = $2`,
-      [id, String(userId)]
-    );
-    if (result.rowCount === 0) {
-      return res.status(404).json({ error: 'Generation not found' });
-    }
+    const result = await pool.query("DELETE FROM generations WHERE id=$1 AND user_id=$2", [id, String(userId)]);
+    if (result.rowCount === 0) return res.status(404).json({ error: "Not found" });
     res.status(204).send();
-  } catch (e) {
-    console.error('Failed to delete from gallery:', e.message);
-    res.status(500).json({ error: 'Failed to delete from gallery' });
-  }
+  } catch (e) { res.status(500).json({ error: "Failed to delete" }); }
 });
 
-// ——— Favorites: ensure table exists ———
 const initFavoritesTable = async () => {
   try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS favorite_prompts (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id TEXT NOT NULL,
-        prompt TEXT NOT NULL,
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        UNIQUE(user_id, prompt)
-      )
-    `);
-  } catch (e) {
-    console.error('Failed to init favorite_prompts table:', e.message);
-  }
+    await pool.query(`CREATE TABLE IF NOT EXISTS favorite_prompts (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id TEXT NOT NULL, prompt TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(user_id, prompt))`);
+  } catch (e) { console.error(e.message); }
 };
 
-// ——— GET /api/favorites ———
-app.get('/api/favorites', async (req, res) => {
-  const userId = req.query.userId;
-  if (userId === undefined || userId === '') {
-    return res.json([]);
-  }
+app.get("/api/favorites", async (req, res) => {
+  if (!req.query.userId) return res.json([]);
+  try { const r = await pool.query("SELECT prompt FROM favorite_prompts WHERE user_id=$1 ORDER BY created_at DESC", [String(req.query.userId)]); res.json(r.rows.map(r => r.prompt)); }
+  catch (e) { res.status(500).json({ error: "Failed" }); }
+});
+app.post("/api/favorites", async (req, res) => {
+  const { userId, prompt } = req.body || {};
+  if (!userId || !prompt) return res.status(400).json({ error: "Missing" });
   try {
-    const result = await pool.query(
-      `SELECT prompt FROM favorite_prompts WHERE user_id = $1 ORDER BY created_at DESC`,
-      [String(userId)]
-    );
-    res.json(result.rows.map((row) => row.prompt));
-  } catch (e) {
-    console.error('Failed to load favorites:', e.message);
-    res.status(500).json({ error: 'Failed to load favorites' });
-  }
+    await pool.query("INSERT INTO favorite_prompts (user_id, prompt) VALUES ($1,$2) ON CONFLICT (user_id, prompt) DO NOTHING", [String(userId), String(prompt).trim()]);
+    const r = await pool.query("SELECT prompt FROM favorite_prompts WHERE user_id=$1 ORDER BY created_at DESC", [String(userId)]);
+    res.json(r.rows.map(r => r.prompt));
+  } catch (e) { res.status(500).json({ error: "Failed" }); }
+});
+app.delete("/api/favorites", async (req, res) => {
+  const { userId, prompt } = req.body || {};
+  if (!userId) return res.status(400).json({ error: "Missing userId" });
+  try {
+    await pool.query("DELETE FROM favorite_prompts WHERE user_id=$1 AND prompt=$2", [String(userId), String(prompt || "")]);
+    const r = await pool.query("SELECT prompt FROM favorite_prompts WHERE user_id=$1 ORDER BY created_at DESC", [String(userId)]);
+    res.json(r.rows.map(r => r.prompt));
+  } catch (e) { res.status(500).json({ error: "Failed" }); }
 });
 
-// ——— POST /api/favorites ———
-app.post('/api/favorites', async (req, res) => {
-  const userId = req.body?.userId;
-  const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt.trim() : '';
-  if (!userId || !prompt) {
-    return res.status(400).json({ error: 'Missing userId or prompt' });
-  }
-  try {
-    await pool.query(
-      `INSERT INTO favorite_prompts (user_id, prompt) VALUES ($1, $2) ON CONFLICT (user_id, prompt) DO NOTHING`,
-      [String(userId), prompt]
-    );
-    const result = await pool.query(
-      `SELECT prompt FROM favorite_prompts WHERE user_id = $1 ORDER BY created_at DESC`,
-      [String(userId)]
-    );
-    res.json(result.rows.map((row) => row.prompt));
-  } catch (e) {
-    console.error('Failed to add favorite:', e.message);
-    res.status(500).json({ error: 'Failed to add favorite' });
-  }
-});
-
-// ——— DELETE /api/favorites ———
-app.delete('/api/favorites', async (req, res) => {
-  const userId = req.body?.userId;
-  const prompt = req.body?.prompt != null ? String(req.body.prompt) : '';
-  if (!userId) {
-    return res.status(400).json({ error: 'Missing userId' });
-  }
-  try {
-    await pool.query(
-      `DELETE FROM favorite_prompts WHERE user_id = $1 AND prompt = $2`,
-      [String(userId), prompt]
-    );
-    const result = await pool.query(
-      `SELECT prompt FROM favorite_prompts WHERE user_id = $1 ORDER BY created_at DESC`,
-      [String(userId)]
-    );
-    res.json(result.rows.map((row) => row.prompt));
-  } catch (e) {
-    console.error('Failed to remove favorite:', e.message);
-    res.status(500).json({ error: 'Failed to remove favorite' });
-  }
-});
-
-// ——— Credits (Telegram Stars): ensure tables exist ———
 const initUserCreditsTable = async () => {
   try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS user_credits (
-        user_id TEXT PRIMARY KEY,
-        credits BIGINT NOT NULL DEFAULT 0
-      )
-    `);
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS star_payments (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id TEXT NOT NULL,
-        telegram_payment_charge_id TEXT NOT NULL,
-        credits_added BIGINT NOT NULL,
-        payload TEXT,
-        created_at TIMESTAMPTZ DEFAULT NOW()
-      )
-    `);
-  } catch (e) {
-    console.error('Failed to init user_credits/star_payments tables:', e.message);
-  }
+    await pool.query(`CREATE TABLE IF NOT EXISTS user_credits (user_id TEXT PRIMARY KEY, credits BIGINT NOT NULL DEFAULT 0)`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS star_payments (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id TEXT NOT NULL, telegram_payment_charge_id TEXT NOT NULL, credits_added BIGINT NOT NULL, payload TEXT, created_at TIMESTAMPTZ DEFAULT NOW())`);
+  } catch (e) { console.error(e.message); }
+};
+
+const initGenerationsTable = async () => {
+  try {
+    await pool.query(`CREATE TABLE IF NOT EXISTS generations (id UUID PRIMARY KEY, user_id TEXT NOT NULL, url TEXT NOT NULL, prompt TEXT, model TEXT, media_type TEXT DEFAULT 'video', created_at TIMESTAMPTZ DEFAULT NOW())`);
+    await pool.query(`ALTER TABLE generations ADD COLUMN IF NOT EXISTS media_type TEXT DEFAULT 'video'`);
+  } catch (e) { console.error(e.message); }
 };
 
 const INITIAL_CREDITS = 100;
-
 const ensureUserCredits = async (userId) => {
   if (!userId) return;
-  try {
-    await pool.query(
-      `INSERT INTO user_credits (user_id, credits) VALUES ($1, $2)
-       ON CONFLICT (user_id) DO NOTHING`,
-      [String(userId), INITIAL_CREDITS]
-    );
-  } catch (e) {
-    console.error('Failed to ensure user credits:', e.message);
-  }
+  try { await pool.query("INSERT INTO user_credits (user_id, credits) VALUES ($1,$2) ON CONFLICT (user_id) DO NOTHING", [String(userId), INITIAL_CREDITS]); }
+  catch (e) { console.error(e.message); }
 };
 
-// ——— GET /api/credits ———
-app.get('/api/credits', async (req, res) => {
-  const userId = req.query.userId;
-  if (userId === undefined || userId === '') {
-    return res.json({ credits: 0 });
-  }
+app.get("/api/credits", async (req, res) => {
+  if (!req.query.userId) return res.json({ credits: 0 });
   try {
-    // Создаём строку для нового пользователя, если её ещё нет.
-    // Это обрабатывает пользователей, зашедших до появления таблицы user_credits.
-    await ensureUserCredits(userId);
-    const result = await pool.query(
-      `SELECT credits FROM user_credits WHERE user_id = $1`,
-      [String(userId)]
-    );
-    const credits = result.rows.length ? Number(result.rows[0].credits) : INITIAL_CREDITS;
-    res.json({ credits });
-  } catch (e) {
-    console.error('Failed to load credits:', e.message);
-    res.status(500).json({ error: 'Failed to load credits' });
-  }
+    await ensureUserCredits(req.query.userId);
+    const r = await pool.query("SELECT credits FROM user_credits WHERE user_id=$1", [String(req.query.userId)]);
+    res.json({ credits: r.rows.length ? Number(r.rows[0].credits) : INITIAL_CREDITS });
+  } catch (e) { res.status(500).json({ error: "Failed" }); }
 });
 
-// ——— GET /api/packs (список пакетов для покупки монет) ———
-// ——— POST /api/invoice-link (Telegram Stars) ———
 const STAR_PACKS = [
-  { id: '25', stars: 25, credits: 50, title: '50 монет', description: '25 Stars — 50 монет', priceRub: 49 },
-  { id: '50', stars: 50, credits: 100, title: '100 монет', description: '50 Stars — 100 монет', priceRub: 95 },
-  { id: '100', stars: 100, credits: 210, title: '200 монет +10 бонус', description: '100 Stars — 200 монет +10 бонус', priceRub: 179 },
-  { id: '250', stars: 250, credits: 530, title: '500 монет +30 бонус', description: '250 Stars — 500 монет +30 бонус', priceRub: 429 },
+  { id: "25",  stars: 25,  credits: 50,  title: "50 монет",           description: "25 Stars — 50 монет",           priceRub: 49  },
+  { id: "50",  stars: 50,  credits: 100, title: "100 монет",          description: "50 Stars — 100 монет",          priceRub: 95  },
+  { id: "100", stars: 100, credits: 210, title: "200 монет +10 бонус", description: "100 Stars — 200 монет +10 бонус", priceRub: 179 },
+  { id: "250", stars: 250, credits: 530, title: "500 монет +30 бонус", description: "250 Stars — 500 монет +30 бонус", priceRub: 429 },
 ];
 const DEFAULT_PACK = STAR_PACKS[0];
 
-app.get('/api/packs', (_req, res) => {
-  res.json(STAR_PACKS.map((p) => ({ id: p.id, stars: p.stars, credits: p.credits, title: p.title, description: p.description, priceRub: p.priceRub })));
-});
+app.get("/api/packs", (_req, res) => res.json(STAR_PACKS));
 
-app.post('/api/invoice-link', async (req, res) => {
+app.post("/api/invoice-link", async (req, res) => {
   const token = process.env.TELEGRAM_BOT_TOKEN || process.env.telegram_bot_token || process.env.BOT_TOKEN;
-  if (!token) {
-    return res.status(503).json({ error: 'Payments not configured: TELEGRAM_BOT_TOKEN' });
-  }
-  const userId = req.body?.userId != null ? String(req.body.userId) : '';
-  const packId = req.body?.pack != null ? String(req.body.pack) : DEFAULT_PACK.id;
-  if (!userId) {
-    return res.status(400).json({ error: 'Missing userId' });
-  }
-  const pack = STAR_PACKS.find((p) => p.id === packId) || DEFAULT_PACK;
+  if (!token) return res.status(503).json({ error: "Payments not configured" });
+  const userId = req.body?.userId != null ? String(req.body.userId) : "";
+  const pack = STAR_PACKS.find(p => p.id === String(req.body?.pack || "")) || DEFAULT_PACK;
+  if (!userId) return res.status(400).json({ error: "Missing userId" });
   const payload = JSON.stringify({ userId, pack: pack.id });
-  if (Buffer.byteLength(payload, 'utf8') > 128) {
-    return res.status(400).json({ error: 'Payload too long' });
-  }
+  if (Buffer.byteLength(payload, "utf8") > 128) return res.status(400).json({ error: "Payload too long" });
   try {
-    const body = {
-      title: pack.title,
-      description: pack.description,
-      payload,
-      currency: 'XTR',
-      prices: [{ label: pack.description, amount: pack.stars }],
-    };
     const r = await fetch(`https://api.telegram.org/bot${token}/createInvoiceLink`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: pack.title, description: pack.description, payload, currency: "XTR", prices: [{ label: pack.description, amount: pack.stars }] }),
     });
     const data = await r.json();
-    if (!data.ok || !data.result) {
-      console.error('createInvoiceLink error:', data);
-      return res.status(502).json({ error: 'Failed to create invoice', description: data.description });
-    }
+    if (!data.ok || !data.result) return res.status(502).json({ error: "Failed", description: data.description });
     res.json({ invoiceUrl: data.result });
-  } catch (e) {
-    console.error('createInvoiceLink exception:', e.message);
-    res.status(502).json({ error: 'Failed to create invoice', message: e.message });
-  }
+  } catch (e) { res.status(502).json({ error: "Failed", message: e.message }); }
 });
 
-// ——— POST /webhook/telegram (Telegram Bot updates: pre_checkout_query, successful_payment) ———
-app.post('/webhook/telegram', (req, res) => {
+app.post("/webhook/telegram", (req, res) => {
   const update = req.body;
-  if (!update || typeof update !== 'object') {
-    return res.status(200).send();
-  }
+  if (!update || typeof update !== "object") return res.status(200).send();
   const token = process.env.TELEGRAM_BOT_TOKEN || process.env.telegram_bot_token || process.env.BOT_TOKEN;
-  if (!token) {
-    return res.status(200).send();
-  }
-  const baseUrl = 'https://api.telegram.org/bot' + token;
-
+  if (!token) return res.status(200).send();
+  const baseUrl = "https://api.telegram.org/bot" + token;
   (async () => {
     if (update.pre_checkout_query) {
-      const id = update.pre_checkout_query.id;
-      await fetch(baseUrl + '/answerPreCheckoutQuery', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pre_checkout_query_id: id, ok: true }),
-      });
+      await fetch(baseUrl + "/answerPreCheckoutQuery", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pre_checkout_query_id: update.pre_checkout_query.id, ok: true }) });
     }
     if (update.message?.successful_payment) {
       const sp = update.message.successful_payment;
-      const payload = sp.invoice_payload || '';
       let userId, packId;
-      try {
-        const p = JSON.parse(payload);
-        userId = p.userId;
-        packId = p.pack;
-      } catch (_) {
-        return;
-      }
+      try { const p = JSON.parse(sp.invoice_payload || "{}"); userId = p.userId; packId = p.pack; } catch { return; }
       if (!userId) return;
-      const pack = STAR_PACKS.find((p) => p.id === packId) || DEFAULT_PACK;
-      const creditsToAdd = pack.credits;
+      const pack = STAR_PACKS.find(p => p.id === packId) || DEFAULT_PACK;
       await initUserCreditsTable();
-      await pool.query(
-        `INSERT INTO user_credits (user_id, credits) VALUES ($1, $2)
-         ON CONFLICT (user_id) DO UPDATE SET credits = user_credits.credits + $2`,
-        [String(userId), creditsToAdd]
-      );
-      await pool.query(
-        `INSERT INTO star_payments (user_id, telegram_payment_charge_id, credits_added, payload)
-         VALUES ($1, $2, $3, $4)`,
-        [String(userId), sp.telegram_payment_charge_id || '', creditsToAdd, payload]
-      );
+      await pool.query("INSERT INTO user_credits (user_id, credits) VALUES ($1,$2) ON CONFLICT (user_id) DO UPDATE SET credits = user_credits.credits + $2", [String(userId), pack.credits]);
+      await pool.query("INSERT INTO star_payments (user_id, telegram_payment_charge_id, credits_added, payload) VALUES ($1,$2,$3,$4)", [String(userId), sp.telegram_payment_charge_id || "", pack.credits, sp.invoice_payload || ""]);
     }
   })().then(() => res.status(200).send(), () => res.status(200).send());
 });
 
-// ——— POST /api/generate ———
 async function handleGenerate(req, res) {
-  const apiKey = process.env.NANO_BANANA_API_KEY;
-  if (!apiKey) {
-    return res.status(503).json({ error: 'Backend not configured: NANO_BANANA_API_KEY' });
+  const apiKey = process.env.KIE_API_KEY || process.env.NANO_BANANA_API_KEY;
+  if (!apiKey) return res.status(503).json({ error: "Backend not configured: KIE_API_KEY" });
+
+  const body = req.body || {};
+  const modelKey     = String(body.model || "kling-img2vid");
+  const prompt       = typeof body.prompt === "string" ? body.prompt.trim() : "";
+  const userId       = body.userId !== undefined ? body.userId : "";
+  const duration     = String(body.duration     || "5");
+  const sound        = body.sound === "true" || body.sound === true;
+  const motionMode   = String(body.motionMode   || "720p");
+  const orientation  = String(body.orientation  || "video");
+  const videoQuality = String(body.videoQuality || "std");
+  const videoAspect  = String(body.videoAspect  || "16:9");
+
+  let imageIds = [], videoIds = [];
+  if (req.files) {
+    for (const f of (req.files.images  || []).slice(0, 4)) { const id = uuidv4(); mediaStore.set(id, { buffer: f.buffer, mimeType: f.mimetype }); imageIds.push(id); }
+    for (const f of (req.files.refvideo || []).slice(0, 1)) { const id = uuidv4(); mediaStore.set(id, { buffer: f.buffer, mimeType: f.mimetype }); videoIds.push(id); }
   }
 
-  let prompt, type, userId, quality, aspect, format, modelKey;
-  let imageIds = [];
+  if (modelKey === "kling-img2vid"  && !prompt)            return res.status(400).json({ error: "Промпт обязателен" });
+  if (modelKey === "kling-img2vid"  && imageIds.length === 0) return res.status(400).json({ error: "Загрузите опорное изображение" });
+  if (modelKey === "kling-motion"   && imageIds.length === 0) return res.status(400).json({ error: "Загрузите опорное изображение" });
+  if (modelKey === "kling-motion"   && videoIds.length === 0) return res.status(400).json({ error: "Загрузите референс видео" });
+  if (modelKey === "kling-video"    && !prompt && imageIds.length === 0) return res.status(400).json({ error: "Введите промпт или загрузите изображение" });
 
-  if (req.is('multipart/form-data') && req.files?.length) {
-    prompt = req.body.prompt;
-    type = (req.body.type || 'IMAGETOIAMGE').toUpperCase();
-    userId = req.body.userId !== undefined ? req.body.userId : '';
-    quality = req.body.quality;
-    aspect = req.body.aspect || '1:1';
-    format = req.body.format;
-    modelKey = req.body.model;
-    const files = Array.isArray(req.files) ? req.files : (req.file ? [req.file] : []);
-    const imagesField = req.files?.length ? req.files : files;
-    for (const f of imagesField.slice(0, 8)) {
-      const id = uuidv4();
-      imageStore.set(id, { buffer: f.buffer, mimeType: f.mimetype || 'image/png' });
-      imageIds.push(id);
-    }
-  } else {
-    const body = req.body || {};
-    prompt = body.prompt;
-    type = (body.type || (body.images?.length ? 'IMAGETOIAMGE' : 'TEXTTOIAMGE')).toUpperCase();
-    userId = body.userId !== undefined ? body.userId : '';
-    quality = body.quality;
-    aspect = body.aspect || '1:1';
-    format = body.format;
-    modelKey = body.model;
-    const images = body.images || [];
-    for (let i = 0; i < Math.min(images.length, 8); i++) {
-      const img = images[i];
-      let buffer;
-      let mimeType = 'image/png';
-      if (typeof img === 'string') {
-        const base64 = img.replace(/^data:image\/\w+;base64,/, '');
-        buffer = Buffer.from(base64, 'base64');
-        const m = img.match(/^data:(image\/\w+);base64,/);
-        if (m) mimeType = m[1];
-      } else if (img?.data) {
-        const base64 = typeof img.data === 'string' ? img.data.replace(/^data:image\/\w+;base64,/, '') : img.data;
-        buffer = Buffer.from(base64, 'base64');
-        mimeType = img.mimeType || 'image/png';
-      } else continue;
-      const id = uuidv4();
-      imageStore.set(id, { buffer, mimeType });
-      imageIds.push(id);
-    }
-  }
-
-  if (!prompt || typeof prompt !== 'string') {
-    return res.status(400).json({ error: 'Missing or invalid prompt' });
-  }
-  if (type === 'IMAGETOIAMGE' && imageIds.length === 0) {
-    return res.status(400).json({ error: 'Загрузите хотя бы одно изображение' });
-  }
-  if (type !== 'TEXTTOIAMGE' && type !== 'IMAGETOIAMGE') {
-    return res.status(400).json({ error: 'Invalid type' });
-  }
-
-  const qVal = String(quality ?? '1');
-  const q = qVal === '4' ? 4 : qVal === '2' ? 2 : 1;
-  let tokensSpent = 10;
-  if (modelKey === 'nano') {
-    tokensSpent = 10;
-  } else if (modelKey === 'nano-pro') {
-    tokensSpent = q === 4 ? 60 : 45;
-  } else if (modelKey === 'nano-2') {
-    tokensSpent = q === 1 ? 20 : q === 2 ? 30 : 45;
-  }
+  let tokensSpent = modelKey === "kling-img2vid" ? (duration === "10" ? 50 : 30) : modelKey === "kling-motion" ? (motionMode === "1080p" ? 60 : 40) : (videoQuality === "pro" ? 80 : 50);
 
   let remainingCredits;
-  if (userId !== undefined && userId !== null && String(userId) !== '') {
-    const normalizedUserId = String(userId);
-    // Гарантируем наличие строки перед UPDATE — для «старых» пользователей,
-    // зашедших до создания таблицы user_credits.
-    await ensureUserCredits(normalizedUserId);
+  if (userId !== undefined && userId !== null && String(userId) !== "") {
+    const uid = String(userId);
+    await ensureUserCredits(uid);
     try {
-      const update = await pool.query(
-        `UPDATE user_credits SET credits = credits - $2
-         WHERE user_id = $1 AND credits >= $2
-         RETURNING credits`,
-        [normalizedUserId, tokensSpent]
-      );
-      if (update.rowCount === 0) {
-        let currentCredits;
-        try {
-          const current = await pool.query(
-            `SELECT credits FROM user_credits WHERE user_id = $1`,
-            [normalizedUserId]
-          );
-          if (current.rows.length) {
-            currentCredits = Number(current.rows[0].credits);
-          }
-        } catch {
-          currentCredits = undefined;
-        }
-        return res.status(402).json({
-          error: 'INSUFFICIENT_CREDITS',
-          message: 'Недостаточно токенов',
-          required: tokensSpent,
-          credits: currentCredits,
-        });
+      const upd = await pool.query("UPDATE user_credits SET credits = credits - $2 WHERE user_id=$1 AND credits >= $2 RETURNING credits", [uid, tokensSpent]);
+      if (upd.rowCount === 0) {
+        let cur; try { const r = await pool.query("SELECT credits FROM user_credits WHERE user_id=$1", [uid]); if (r.rows.length) cur = Number(r.rows[0].credits); } catch { /* ignore */ }
+        return res.status(402).json({ error: "INSUFFICIENT_CREDITS", message: "Недостаточно токенов", required: tokensSpent, credits: cur });
       }
-      remainingCredits = Number(update.rows[0].credits);
-    } catch (e) {
-      console.error('Failed to deduct credits:', e.message);
-      return res.status(500).json({ error: 'Failed to deduct credits' });
-    }
+      remainingCredits = Number(upd.rows[0].credits);
+    } catch (e) { console.error(e.message); return res.status(500).json({ error: "Failed to deduct credits" }); }
   }
 
   const callBackUrl = `${BASE_URL}/api/callback`;
-  const imageUrls = imageIds.map((id) => `${BASE_URL}/api/image/${id}`);
+  const imageUrls = imageIds.map(id => `${BASE_URL}/api/image/${id}`);
+  const videoUrls = videoIds.map(id => `${BASE_URL}/api/image/${id}`);
 
   let payload;
-  if (modelKey === 'nano-pro') {
-    // nano-banana-pro: prompt, aspect_ratio, resolution, output_format, опционально image_input (до 8 URL)
-    const resolution = quality === '4' ? '4K' : quality === '2' ? '2K' : '1K';
-    const outFormat = (format || 'png').toLowerCase() === 'jpeg' ? 'jpg' : (format || 'png');
-    const input = {
-      prompt: prompt.trim(),
-      aspect_ratio: aspect || '1:1',
-      resolution: resolution || '1K',
-      output_format: outFormat || 'png',
-    };
-    if (imageUrls.length > 0) {
-      input.image_input = imageUrls;
-    }
-    payload = {
-      model: 'nano-banana-pro',
-      callBackUrl,
-      input,
-    };
-  } else if (modelKey === 'nano-2') {
-    // nano-banana-2: prompt, aspect_ratio, resolution, output_format, google_search (bool), опционально image_input (до 14 URL)
-    const resolution = quality === '4' ? '4K' : quality === '2' ? '2K' : '1K';
-    const outFormat = (format || 'png').toLowerCase() === 'jpeg' ? 'jpg' : (format || 'png');
-    const input = {
-      prompt: prompt.trim(),
-      aspect_ratio: aspect || 'auto',
-      google_search: false,
-      resolution: resolution || '1K',
-      output_format: outFormat || 'jpg',
-    };
-    if (imageUrls.length > 0) {
-      input.image_input = imageUrls.slice(0, 14);
-    }
-    payload = {
-      model: 'nano-banana-2',
-      callBackUrl,
-      input,
-    };
-  } else if (modelKey === 'nano' && imageUrls.length > 0) {
-    // Базовая модель + картинки: google/nano-banana-edit (image_urls)
-    payload = {
-      model: 'google/nano-banana-edit',
-      callBackUrl,
-      input: {
-        prompt: prompt.trim(),
-        image_urls: imageUrls.slice(0, 10),
-        output_format: (format || 'png').toLowerCase() === 'jpeg' ? 'jpeg' : 'png',
-        image_size: aspect || '1:1',
-      },
-    };
+  if (modelKey === "kling-img2vid") {
+    payload = { model: "kling-2.6/image-to-video", callBackUrl, input: { prompt, image_urls: imageUrls.slice(0, 1), sound, duration: String(duration) } };
+  } else if (modelKey === "kling-motion") {
+    const input = { input_urls: imageUrls.slice(0, 1), video_urls: videoUrls.slice(0, 1), character_orientation: orientation, mode: motionMode };
+    if (prompt) input.prompt = prompt;
+    payload = { model: "kling-2.6/motion-control", callBackUrl, input };
   } else {
-    // Базовая модель без картинок: text-to-image google/nano-banana
-    payload = {
-      model: 'google/nano-banana',
-      callBackUrl,
-      input: {
-        prompt: prompt.trim(),
-        output_format: format || 'png',
-        image_size: aspect || '1:1',
-      },
-    };
+    const input = { mode: videoQuality, sound, duration: String(duration), multi_shots: false, aspect_ratio: videoAspect };
+    if (prompt) input.prompt = prompt;
+    if (imageUrls.length > 0) input.image_urls = imageUrls.slice(0, 2);
+    payload = { model: "kling-3.0/video", callBackUrl, input };
   }
 
   try {
-    const r = await fetch('https://api.kie.ai/api/v1/jobs/createTask', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(payload),
+    const r = await fetch("https://api.kie.ai/api/v1/jobs/createTask", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` }, body: JSON.stringify(payload),
     });
-    const body = await r.json();
-    if (body?.code !== 200 || !body?.data?.taskId) {
-      console.error('KIE createTask error:', body?.code, body?.message || body?.msg, JSON.stringify(body));
-      return res.status(502).json({
-        error: 'Nano Banana error',
-        message: body?.message || body?.msg || 'No taskId returned',
-        code: body?.code,
-      });
+    const data = await r.json();
+    if (data?.code !== 200 || !data?.data?.taskId) {
+      console.error("KIE error:", data?.code, data?.message || data?.msg);
+      return res.status(502).json({ error: "KIE API error", message: data?.message || data?.msg || "No taskId", code: data?.code });
     }
-    const taskId = body.data.taskId;
-    taskMeta.set(taskId, {
-      userId,
-      prompt: prompt.trim(),
-      createdAt: Date.now(),
-      modelKey,
-      aspect,
-      format,
-      tokensSpent,
-    });
-    if (typeof remainingCredits === 'number') {
-      res.status(200).json({ taskId, credits: remainingCredits });
-    } else {
-      res.status(200).json({ taskId });
-    }
-  } catch (e) {
-    res.status(502).json({ error: 'Failed to call Nano Banana', message: e.message });
-  }
+    const taskId = data.data.taskId;
+    taskMeta.set(taskId, { userId, prompt, createdAt: Date.now(), modelKey, tokensSpent });
+    res.status(200).json(typeof remainingCredits === "number" ? { taskId, credits: remainingCredits } : { taskId });
+  } catch (e) { res.status(502).json({ error: "Failed to call KIE API", message: e.message }); }
 }
 
-app.post('/api/generate', (req, res, next) => {
-  if (req.is('application/json')) {
-    return handleGenerate(req, res).catch(next);
-  }
-  next();
-}, upload.array('images', 8), (req, res, next) => {
-  handleGenerate(req, res).catch(next);
-});
+app.post("/api/generate",
+  (req, res, next) => { if (req.is("application/json")) return handleGenerate(req, res).catch(next); next(); },
+  upload.fields([{ name: "images", maxCount: 4 }, { name: "refvideo", maxCount: 1 }]),
+  (req, res, next) => handleGenerate(req, res).catch(next)
+);
 
 (async () => {
   await initFavoritesTable();
   await initUserCreditsTable();
-
+  await initGenerationsTable();
   app.listen(PORT, () => {
-    console.log(`Server running at ${BASE_URL || 'http://localhost:' + PORT}`);
+    console.log(`Server running at ${BASE_URL || "http://localhost:" + PORT}`);
     const token = process.env.TELEGRAM_BOT_TOKEN || process.env.telegram_bot_token || process.env.BOT_TOKEN;
     const baseUrl = process.env.BASE_URL;
-    if (token && baseUrl && baseUrl.startsWith('https://')) {
-      const webhookUrl = encodeURIComponent(baseUrl.replace(/\/$/, '') + '/webhook/telegram');
-      fetch(`https://api.telegram.org/bot${token}/setWebhook?url=${webhookUrl}`)
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.ok) console.log('Telegram webhook set');
-          else console.warn('Telegram setWebhook:', data.description);
-        })
-        .catch((e) => console.warn('Telegram setWebhook failed:', e.message));
+    if (token && baseUrl?.startsWith("https://")) {
+      fetch(`https://api.telegram.org/bot${token}/setWebhook?url=${encodeURIComponent(baseUrl.replace(/\/$/, "") + "/webhook/telegram")}`)
+        .then(r => r.json()).then(d => d.ok ? console.log("Telegram webhook set") : console.warn("setWebhook:", d.description))
+        .catch(e => console.warn("setWebhook failed:", e.message));
     }
   });
 })();
