@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Backend for Xside AI Mini App — Video Generation
  * Models: kling-2.6/image-to-video, kling-2.6/motion-control, kling-3.0/video
  */
@@ -264,7 +264,43 @@ app.post("/webhook/telegram", (req, res) => {
   const token = process.env.TELEGRAM_BOT_TOKEN || process.env.telegram_bot_token || process.env.BOT_TOKEN;
   if (!token) return res.status(200).send();
   const baseUrl = "https://api.telegram.org/bot" + token;
+
+  // URLs for the two Mini Apps shown on /start
+  // APP2_URL can point to a second app (e.g. image-generation service).
+  // If not set, only the video app button is shown.
+  const videoAppUrl = (process.env.BASE_URL || "").replace(/\/$/, "");
+  const imageAppUrl = (process.env.APP2_URL  || "").replace(/\/$/, "");
+
   (async () => {
+    // ——— /start: send app launcher buttons ———
+    if (update.message?.text === "/start") {
+      const chatId = update.message.chat.id;
+
+      // Build inline keyboard rows
+      const rows = [];
+      if (videoAppUrl) {
+        rows.push([{ text: "🎬 Генерация видео", web_app: { url: videoAppUrl } }]);
+      }
+      if (imageAppUrl) {
+        rows.push([{ text: "🖼️ Генерация изображений", web_app: { url: imageAppUrl } }]);
+      }
+
+      const body = {
+        chat_id: chatId,
+        text: "Выберите приложение:",
+        reply_markup: rows.length
+          ? { inline_keyboard: rows }
+          : undefined,
+      };
+
+      await fetch(baseUrl + "/sendMessage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    }
+
+    // ——— Payments ———
     if (update.pre_checkout_query) {
       await fetch(baseUrl + "/answerPreCheckoutQuery", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pre_checkout_query_id: update.pre_checkout_query.id, ok: true }) });
     }
