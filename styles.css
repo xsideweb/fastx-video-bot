@@ -319,7 +319,7 @@ body {
 
 .prompt-options {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 10px;
   margin-bottom: 12px;
 }
@@ -340,7 +340,7 @@ body {
 .select {
   width: 100%;
   padding: 10px 12px;
-  font-size: 0.9rem;
+  font-size: 0.7rem;
   color: var(--text);
   background: var(--bg-card);
   border: none;
