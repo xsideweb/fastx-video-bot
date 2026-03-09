@@ -19,19 +19,54 @@
   const gallery = [];
   let favoritePrompts = [];
 
+  // ——— Pricing helpers ———
+  function calcImgVidCost(duration, sound) {
+    if (duration === '10') return sound ? 1100 : 550;
+    return sound ? 550 : 275;
+  }
+  function calcMotionCost(motionMode, duration) {
+    if (motionMode === '1080p') return duration === '10' ? 450 : 225;
+    return duration === '10' ? 300 : 150;
+  }
+  function calcKling3Cost(videoQuality, sound, duration) {
+    const is1080p = videoQuality === 'pro';
+    if (is1080p) {
+      if (sound) return duration === '10' ? 2000 : 1000;
+      return duration === '10' ? 1350 : 675;
+    }
+    if (sound) return duration === '10' ? 1500 : 750;
+    return duration === '10' ? 1000 : 500;
+  }
+
   // ——— Model config ———
   const MODEL_CONFIG = {
     'kling-img2vid': {
       maxImages: 1, requiresImage: true, requiresVideo: false,
-      getCost() { return $('#select-duration')?.value === '10' ? 50 : 30; },
+      getCost() {
+        return calcImgVidCost(
+          $('#select-duration')?.value || '5',
+          $('#select-sound')?.value === 'true'
+        );
+      },
     },
     'kling-motion': {
       maxImages: 1, requiresImage: true, requiresVideo: true,
-      getCost() { return $('#select-motion-mode')?.value === '1080p' ? 60 : 40; },
+      getCost() {
+        return calcMotionCost(
+          $('#select-motion-mode')?.value || '720p',
+          $('#select-duration')?.value || '5'
+        );
+      },
     },
     'kling-video': {
       maxImages: 2, requiresImage: false, requiresVideo: false,
-      getCost() { return $('#select-video-quality')?.value === 'pro' ? 80 : 50; },
+      getCost() {
+        return calcKling3Cost(
+          $('#select-video-quality')?.value || 'std',
+          $('#select-sound')?.value === 'true',
+          $('#select-duration')?.value || '5'
+        );
+      },
     },
   };
 
@@ -48,10 +83,7 @@
   // ——— DOM refs ———
   const screenCreate   = $('#screen-create');
   const screenGallery  = $('#screen-gallery');
-  const screenProfile  = $('#screen-profile');
-  const profileNickname = $('#profile-nickname');
-  const profileCredits  = $('#profile-credits');
-  const profileGenerationsHint = $('#profile-generations-hint');
+  const screenPrompts  = $('#screen-prompts');
   const profileFavoritesList   = $('#profile-favorites-list');
   const profileFavoritesEmpty  = $('#profile-favorites-empty');
   const promptInput   = $('#prompt-input');
@@ -220,7 +252,7 @@
     const isImgVid = currentModel === 'kling-img2vid';
     const isMotion = currentModel === 'kling-motion';
     const isKling3 = currentModel === 'kling-video';
-    $('#duration-wrap')?.classList.toggle('hidden', !isImgVid && !isKling3);
+    $('#duration-wrap')?.classList.toggle('hidden', !isImgVid && !isKling3 && !isMotion);
     $('#sound-wrap')?.classList.toggle('hidden', !isImgVid && !isKling3);
     $('#motion-mode-wrap')?.classList.toggle('hidden', !isMotion);
     $('#orientation-wrap')?.classList.toggle('hidden', !isMotion);
@@ -273,7 +305,6 @@
   function renderCredits() {
     if (creditsEl) creditsEl.textContent = String(credits);
     if (menuCreditsEl) menuCreditsEl.textContent = String(credits);
-    if (screenProfile?.classList.contains('active')) renderProfile();
   }
 
   // ——— Menu ———
@@ -294,7 +325,7 @@
   function toggleMenu() { menuOverlay && !menuOverlay.classList.contains('hidden') ? closeMenu() : openMenu(); }
   if (menuBtn) menuBtn.addEventListener('click', toggleMenu);
   if (menuBackdrop) menuBackdrop.addEventListener('click', closeMenu);
-  if (menuBtnTopup) menuBtnTopup.addEventListener('click', () => { closeMenu(); showScreen('profile'); });
+  if (menuBtnTopup) menuBtnTopup.addEventListener('click', () => { closeMenu(); });
 
   // ——— Gallery grid item ———
   function createGridItem(item) {
@@ -441,7 +472,7 @@
   if (btnPreviewPrompt) btnPreviewPrompt.addEventListener('click', (e) => { e.stopPropagation(); togglePromptPopover(); });
   if (btnPreviewFavoriteOnImage) btnPreviewFavoriteOnImage.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (currentPreviewItem?.prompt) addFavoritePrompt(currentPreviewItem.prompt).then(() => { updateFavoriteButtonStyle(); if (screenProfile?.classList.contains('active')) renderProfileFavorites(); });
+    if (currentPreviewItem?.prompt) addFavoritePrompt(currentPreviewItem.prompt).then(() => { updateFavoriteButtonStyle(); if (screenPrompts?.classList.contains('active')) renderProfileFavorites(); });
   });
   if (btnPreviewCopyOnImage) btnPreviewCopyOnImage.addEventListener('click', (e) => { e.stopPropagation(); copyPromptToClipboard(); });
   if (previewClose)    previewClose.addEventListener('click', closePreview);
@@ -481,12 +512,12 @@
     $$('.nav-item').forEach((n) => n.classList.toggle('active', n.dataset.screen === name));
     if (name === 'create'  && screenCreate)  screenCreate.classList.add('active');
     if (name === 'gallery' && screenGallery) { screenGallery.classList.add('active'); renderGalleryGrid(); }
-    if (name === 'profile' && screenProfile) { screenProfile.classList.add('active'); loadCreditsFromApi().catch(() => {}); loadFavoritePrompts().then(() => renderProfile()); }
+    if (name === 'prompts' && screenPrompts) { screenPrompts.classList.add('active'); loadFavoritePrompts().then(() => renderProfileFavorites()); }
   }
   $$('.nav-item').forEach((btn) => { if (!btn.disabled) btn.addEventListener('click', () => showScreen(btn.dataset.screen)); });
   if (viewAll) viewAll.addEventListener('click', () => showScreen('gallery'));
 
-  // ——— Profile ———
+  // ——— Prompts screen ———
   function renderProfileFavorites() {
     if (!profileFavoritesList || !profileFavoritesEmpty) return;
     profileFavoritesList.innerHTML = '';
@@ -507,14 +538,6 @@
     });
   }
 
-  function renderProfile() {
-    if (profileNickname) profileNickname.textContent = getNickname();
-    if (profileCredits)  profileCredits.textContent  = String(credits);
-    const gens = Math.floor(credits / 30);
-    if (profileGenerationsHint) profileGenerationsHint.textContent = currentLang === 'en' ? `(≈ ${gens} videos)` : `(≈ ${gens} видео)`;
-    renderProfileFavorites();
-  }
-
   // ——— Topup packs ———
   const TOPUP_PACKS = [
     { id: '25',  stars: 25,  credits: 50,  priceRub: 49  },
@@ -523,11 +546,10 @@
     { id: '250', stars: 250, credits: 530, priceRub: 429 },
   ];
 
-  const profileBtnTopupStars = $('#profile-btn-topup-stars');
   const topupPacksOverlay  = $('#topup-packs-overlay');
   const topupPacksList     = $('#topup-packs-list');
-  const topupPacksBackdrop = $('.topup-packs-backdrop', topupPacksOverlay);
-  const topupPacksClose    = $('.topup-packs-close', topupPacksOverlay);
+  const topupPacksBackdrop = topupPacksOverlay ? $('.topup-packs-backdrop', topupPacksOverlay) : null;
+  const topupPacksClose    = topupPacksOverlay ? $('.topup-packs-close', topupPacksOverlay) : null;
 
   function renderTopupButtons(container) {
     if (!container || !TOPUP_PACKS.length) return;
@@ -568,13 +590,8 @@
 
   function closeTopupPacksModal() { if (topupPacksOverlay) { topupPacksOverlay.classList.add('hidden'); topupPacksOverlay.setAttribute('aria-hidden', 'true'); } }
 
-  if (profileBtnTopupStars) profileBtnTopupStars.addEventListener('click', openTopupPacksModal);
   if (topupPacksBackdrop)   topupPacksBackdrop.addEventListener('click', closeTopupPacksModal);
   if (topupPacksClose)      topupPacksClose.addEventListener('click', closeTopupPacksModal);
-
-  [$('#profile-btn-test-2'), $('#profile-btn-test-3')].forEach((btn, i) => {
-    if (btn) btn.addEventListener('click', () => { if (Telegram?.showPopup) Telegram.showPopup({ title: 'Тест', message: 'Нажата тестовая кнопка ' + (i + 2) }); });
-  });
 
   // ——— Progress ———
   let progressIntervalId = null;
@@ -602,28 +619,24 @@
       const r = await fetch(apiUrl('/api/credits?userId=' + encodeURIComponent(String(uid))));
       if (!r.ok) return;
       const data = await r.json();
-      if (typeof data.credits === 'number') {
-        credits = Math.max(0, data.credits); renderCredits();
-        if (profileCredits) profileCredits.textContent = String(credits);
-        if (profileGenerationsHint) profileGenerationsHint.textContent = '(≈ ' + Math.floor(credits / 30) + ' видео)';
-      }
+      if (typeof data.credits === 'number') { credits = Math.max(0, data.credits); renderCredits(); }
     } catch { /* ignore */ }
   }
 
   // ——— Favorites API ———
   async function loadFavoritePrompts() {
     const uid = getUserId(); if (uid == null) { favoritePrompts = []; return; }
-    try { const r = await fetch(apiUrl('/api/favorites?userId=' + encodeURIComponent(String(uid)))); favoritePrompts = r.ok ? (await r.json().catch(() => [])) : []; if (!Array.isArray(favoritePrompts)) favoritePrompts = []; }
+    try { const r = await fetch(apiUrl('/api/favorites?userId=' + encodeURIComponent(String(uid)) + '&type=video')); favoritePrompts = r.ok ? (await r.json().catch(() => [])) : []; if (!Array.isArray(favoritePrompts)) favoritePrompts = []; }
     catch { favoritePrompts = []; }
   }
   async function addFavoritePrompt(text) {
     const t = (text || '').trim(); const uid = getUserId(); if (!t || uid == null) return;
-    try { const r = await fetch(apiUrl('/api/favorites'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: String(uid), prompt: t }) }); if (r.ok) await loadFavoritePrompts(); }
+    try { const r = await fetch(apiUrl('/api/favorites'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: String(uid), prompt: t, type: 'video' }) }); if (r.ok) await loadFavoritePrompts(); }
     catch { /* ignore */ }
   }
   async function removeFavoritePrompt(text) {
     const uid = getUserId(); if (uid == null) return;
-    try { const r = await fetch(apiUrl('/api/favorites'), { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: String(uid), prompt: String(text) }) }); if (r.ok) await loadFavoritePrompts(); }
+    try { const r = await fetch(apiUrl('/api/favorites'), { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: String(uid), prompt: String(text), type: 'video' }) }); if (r.ok) await loadFavoritePrompts(); }
     catch { /* ignore */ }
   }
 
@@ -677,18 +690,13 @@
     const va = document.querySelector('#view-all'); if (va) va.textContent = isEn ? 'All' : 'Все';
     const gt = document.querySelector('.gallery-title'); if (gt) gt.textContent = isEn ? 'Gallery' : 'Галерея';
     if (galleryEmpty) galleryEmpty.textContent = isEn ? 'No videos yet. Create the first one on the "Create" tab.' : 'Пока нет видео. Создайте первое на вкладке «Создать».';
-    const bt = document.querySelector('.balance-title'); if (bt) bt.textContent = isEn ? 'Current balance:' : 'Актуальный баланс:';
-    const gens = Math.floor(credits / 30); if (profileGenerationsHint) profileGenerationsHint.textContent = isEn ? `(≈ ${gens} videos)` : `(≈ ${gens} видео)`;
-    const pt = $('#profile-btn-test-2'); if (pt) pt.innerHTML = '<img src="icons/card.svg" alt="" class="icon icon-btn-sm"> ' + (isEn ? 'Buy tokens' : 'Купить токены');
-    const ps = $('#profile-btn-topup-stars'); if (ps) ps.innerHTML = '<img src="icons/star.svg" alt="" class="icon icon-btn-sm"> ' + (isEn ? 'Top up with Stars' : 'Пополнение через Stars');
-    const pc = $('#profile-btn-test-3'); if (pc) pc.innerHTML = '<img src="icons/bitcoin-circle.svg" alt="" class="icon icon-btn-sm"> ' + (isEn ? 'Top up with crypto' : 'Пополнение через криптовалюту');
     const pkt = document.querySelector('.topup-packs-title'); if (pkt) pkt.textContent = isEn ? 'Buy coins' : 'Купить монеты';
     const fvt = document.querySelector('.profile-favorites-title'); if (fvt) fvt.textContent = isEn ? 'Favorite prompts' : 'Избранные промпты';
     if (profileFavoritesEmpty) profileFavoritesEmpty.textContent = isEn ? 'Add prompts from video preview (★).' : 'Добавляйте промпты из превью видео (★).';
     const mcl = document.querySelector('.menu-credits-line');
     if (mcl) { const sp = mcl.querySelector('#menu-credits'); if (sp) { const v = sp.textContent || '0'; mcl.innerHTML = '<img src="icons/banking-coin.svg" alt="" class="icon icon-credits-inline"><span id="menu-credits" class="menu-credits">' + v + '</span> ' + (isEn ? 'coins' : 'монет'); } }
     const mtu = document.querySelector('#menu-btn-topup'); if (mtu) mtu.textContent = isEn ? 'Buy tokens' : 'Купить токены';
-    $$('.bottom-nav .nav-item').forEach((item) => { const lbl = item.querySelector('.nav-label'); if (!lbl) return; const s = item.dataset.screen; if (s === 'create') lbl.textContent = isEn ? 'Create' : 'Создать'; if (s === 'gallery') lbl.textContent = isEn ? 'Gallery' : 'Галерея'; if (s === 'profile') lbl.textContent = isEn ? 'Profile' : 'Профиль'; });
+    $$('.bottom-nav .nav-item').forEach((item) => { const lbl = item.querySelector('.nav-label'); if (!lbl) return; const s = item.dataset.screen; if (s === 'create') lbl.textContent = isEn ? 'Create' : 'Создать'; if (s === 'gallery') lbl.textContent = isEn ? 'Gallery' : 'Галерея'; if (s === 'prompts') lbl.textContent = isEn ? 'Prompts' : 'Промпты'; });
     const ppb = document.querySelector('#btn-preview-prompt'); if (ppb) { ppb.textContent = isEn ? 'Show prompt' : 'Показать промпт'; ppb.setAttribute('aria-label', isEn ? 'Show prompt' : 'Показать промпт'); }
     const bsh = document.querySelector('#btn-share'); if (bsh) bsh.innerHTML = '<img src="icons/share.svg" alt="" class="icon icon-btn-sm"> ' + (isEn ? 'Share' : 'Поделиться');
     const bex = document.querySelector('#btn-export'); if (bex) bex.innerHTML = '<img src="icons/download-minimalistic.svg" alt="" class="icon icon-btn-sm"> ' + (isEn ? 'Download' : 'Скачать');
@@ -707,10 +715,10 @@
 
   // ——— Insufficient credits popup ———
   function showInsufficientCreditsPopup(required) {
-    const msg = currentLang === 'en' ? 'You need ' + required + ' tokens. Please top up your balance.' : 'Для генерации нужно ' + required + ' токенов. Пополните баланс.';
+    const msg = currentLang === 'en' ? 'You need ' + required + ' tokens. Please top up your balance in the Profile app.' : 'Для генерации нужно ' + required + ' токенов. Пополните баланс в приложении Профиль.';
     if (window.Telegram?.WebApp?.showPopup) {
-      window.Telegram.WebApp.showPopup({ title: currentLang === 'en' ? 'Not enough tokens' : 'Недостаточно токенов', message: msg, buttons: [{ id: 'close', type: 'close' }, { id: 'topup', type: 'default', text: currentLang === 'en' ? 'Top up' : 'Пополнить' }] }, (btnId) => { if (btnId === 'topup') showScreen('profile'); });
-    } else { if (window.confirm?.(currentLang === 'en' ? 'Not enough tokens. Open profile?' : 'Недостаточно токенов. Открыть профиль?')) showScreen('profile'); }
+      window.Telegram.WebApp.showPopup({ title: currentLang === 'en' ? 'Not enough tokens' : 'Недостаточно токенов', message: msg, buttons: [{ id: 'close', type: 'close' }] }, () => {});
+    } else { window.alert?.(msg); }
   }
 
   function showError(message) {

@@ -127,11 +127,11 @@ app.post("/api/callback", async (req, res) => {
     const meta = taskMeta.get(taskId);
     if (meta?.userId != null) {
       const id = uuidv4(), createdAt = new Date(meta.createdAt || Date.now());
-      galleryItem = { id, url: resultUrl, prompt: meta.prompt || "", createdAt: createdAt.getTime(), mediaType: "video" };
+      galleryItem = { id, url: resultUrl, prompt: meta.prompt || "", createdAt: createdAt.getTime() };
       try {
         await pool.query(
-          "INSERT INTO generations (id, user_id, url, prompt, model, media_type, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-          [id, String(meta.userId), resultUrl, meta.prompt || "", meta.modelKey || null, "video", createdAt]
+          "INSERT INTO video_generations (id, user_id, url, prompt, model, created_at) VALUES ($1,$2,$3,$4,$5,$6)",
+          [id, String(meta.userId), resultUrl, meta.prompt || "", meta.modelKey || null, createdAt]
         );
       } catch (e) { console.error("Failed to insert gallery item:", e.message); }
     }
@@ -152,10 +152,10 @@ app.get("/api/gallery", async (req, res) => {
   if (!userId) return res.json([]);
   try {
     const result = await pool.query(
-      "SELECT id, url, prompt, media_type, created_at FROM generations WHERE user_id=$1 ORDER BY created_at DESC LIMIT 200",
+      "SELECT id, url, prompt, created_at FROM video_generations WHERE user_id=$1 ORDER BY created_at DESC LIMIT 200",
       [String(userId)]
     );
-    res.json(result.rows.map(row => ({ id: row.id, url: row.url, prompt: row.prompt, mediaType: row.media_type || "video", createdAt: row.created_at ? new Date(row.created_at).getTime() : null })));
+    res.json(result.rows.map(row => ({ id: row.id, url: row.url, prompt: row.prompt, createdAt: row.created_at ? new Date(row.created_at).getTime() : null })));
   } catch (e) { console.error(e.message); res.status(500).json({ error: "Failed to load gallery" }); }
 });
 
@@ -163,7 +163,7 @@ app.delete("/api/gallery", async (req, res) => {
   const { userId, id } = req.body || {};
   if (!userId || !id) return res.status(400).json({ error: "Missing userId or id" });
   try {
-    const result = await pool.query("DELETE FROM generations WHERE id=$1 AND user_id=$2", [id, String(userId)]);
+    const result = await pool.query("DELETE FROM video_generations WHERE id=$1 AND user_id=$2", [id, String(userId)]);
     if (result.rowCount === 0) return res.status(404).json({ error: "Not found" });
     res.status(204).send();
   } catch (e) { res.status(500).json({ error: "Failed to delete" }); }
@@ -171,30 +171,37 @@ app.delete("/api/gallery", async (req, res) => {
 
 const initFavoritesTable = async () => {
   try {
-    await pool.query(`CREATE TABLE IF NOT EXISTS favorite_prompts (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id TEXT NOT NULL, prompt TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(user_id, prompt))`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS favorite_prompts (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id TEXT NOT NULL, prompt TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'photo', created_at TIMESTAMPTZ DEFAULT NOW(), UNIQUE(user_id, prompt, type))`);
+    await pool.query(`ALTER TABLE favorite_prompts ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'photo'`);
   } catch (e) { console.error(e.message); }
 };
 
 app.get("/api/favorites", async (req, res) => {
-  if (!req.query.userId) return res.json([]);
-  try { const r = await pool.query("SELECT prompt FROM favorite_prompts WHERE user_id=$1 ORDER BY created_at DESC", [String(req.query.userId)]); res.json(r.rows.map(r => r.prompt)); }
-  catch (e) { res.status(500).json({ error: "Failed" }); }
+  const userId = req.query.userId;
+  const type = req.query.type || "video";
+  if (!userId) return res.json([]);
+  try {
+    const r = await pool.query("SELECT prompt FROM favorite_prompts WHERE user_id=$1 AND type=$2 ORDER BY created_at DESC", [String(userId), type]);
+    res.json(r.rows.map(r => r.prompt));
+  } catch (e) { res.status(500).json({ error: "Failed" }); }
 });
 app.post("/api/favorites", async (req, res) => {
-  const { userId, prompt } = req.body || {};
+  const { userId, prompt, type } = req.body || {};
+  const promptType = type || "video";
   if (!userId || !prompt) return res.status(400).json({ error: "Missing" });
   try {
-    await pool.query("INSERT INTO favorite_prompts (user_id, prompt) VALUES ($1,$2) ON CONFLICT (user_id, prompt) DO NOTHING", [String(userId), String(prompt).trim()]);
-    const r = await pool.query("SELECT prompt FROM favorite_prompts WHERE user_id=$1 ORDER BY created_at DESC", [String(userId)]);
+    await pool.query("INSERT INTO favorite_prompts (user_id, prompt, type) VALUES ($1,$2,$3) ON CONFLICT (user_id, prompt, type) DO NOTHING", [String(userId), String(prompt).trim(), promptType]);
+    const r = await pool.query("SELECT prompt FROM favorite_prompts WHERE user_id=$1 AND type=$2 ORDER BY created_at DESC", [String(userId), promptType]);
     res.json(r.rows.map(r => r.prompt));
   } catch (e) { res.status(500).json({ error: "Failed" }); }
 });
 app.delete("/api/favorites", async (req, res) => {
-  const { userId, prompt } = req.body || {};
+  const { userId, prompt, type } = req.body || {};
+  const promptType = type || "video";
   if (!userId) return res.status(400).json({ error: "Missing userId" });
   try {
-    await pool.query("DELETE FROM favorite_prompts WHERE user_id=$1 AND prompt=$2", [String(userId), String(prompt || "")]);
-    const r = await pool.query("SELECT prompt FROM favorite_prompts WHERE user_id=$1 ORDER BY created_at DESC", [String(userId)]);
+    await pool.query("DELETE FROM favorite_prompts WHERE user_id=$1 AND prompt=$2 AND type=$3", [String(userId), String(prompt || ""), promptType]);
+    const r = await pool.query("SELECT prompt FROM favorite_prompts WHERE user_id=$1 AND type=$2 ORDER BY created_at DESC", [String(userId), promptType]);
     res.json(r.rows.map(r => r.prompt));
   } catch (e) { res.status(500).json({ error: "Failed" }); }
 });
@@ -208,8 +215,7 @@ const initUserCreditsTable = async () => {
 
 const initGenerationsTable = async () => {
   try {
-    await pool.query(`CREATE TABLE IF NOT EXISTS generations (id UUID PRIMARY KEY, user_id TEXT NOT NULL, url TEXT NOT NULL, prompt TEXT, model TEXT, media_type TEXT DEFAULT 'video', created_at TIMESTAMPTZ DEFAULT NOW())`);
-    await pool.query(`ALTER TABLE generations ADD COLUMN IF NOT EXISTS media_type TEXT DEFAULT 'video'`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS video_generations (id UUID PRIMARY KEY, user_id TEXT NOT NULL, url TEXT NOT NULL, prompt TEXT, model TEXT, created_at TIMESTAMPTZ DEFAULT NOW())`);
   } catch (e) { console.error(e.message); }
 };
 
@@ -344,7 +350,18 @@ async function handleGenerate(req, res) {
   if (modelKey === "kling-motion"   && videoIds.length === 0) return res.status(400).json({ error: "Загрузите референс видео" });
   if (modelKey === "kling-video"    && !prompt && imageIds.length === 0) return res.status(400).json({ error: "Введите промпт или загрузите изображение" });
 
-  let tokensSpent = modelKey === "kling-img2vid" ? (duration === "10" ? 50 : 30) : modelKey === "kling-motion" ? (motionMode === "1080p" ? 60 : 40) : (videoQuality === "pro" ? 80 : 50);
+  const calcImgVidCost = (dur, snd) => dur === "10" ? (snd ? 1100 : 550) : (snd ? 550 : 275);
+  const calcMotionCost = (mode, dur) => mode === "1080p" ? (dur === "10" ? 450 : 225) : (dur === "10" ? 300 : 150);
+  const calcKling3Cost = (qual, snd, dur) => {
+    const is1080p = qual === "pro";
+    if (is1080p) return snd ? (dur === "10" ? 2000 : 1000) : (dur === "10" ? 1350 : 675);
+    return snd ? (dur === "10" ? 1500 : 750) : (dur === "10" ? 1000 : 500);
+  };
+  let tokensSpent = modelKey === "kling-img2vid"
+    ? calcImgVidCost(duration, sound)
+    : modelKey === "kling-motion"
+    ? calcMotionCost(motionMode, duration)
+    : calcKling3Cost(videoQuality, sound, duration);
 
   let remainingCredits;
   if (userId !== undefined && userId !== null && String(userId) !== "") {
@@ -368,7 +385,7 @@ async function handleGenerate(req, res) {
   if (modelKey === "kling-img2vid") {
     payload = { model: "kling-2.6/image-to-video", callBackUrl, input: { prompt, image_urls: imageUrls.slice(0, 1), sound, duration: String(duration) } };
   } else if (modelKey === "kling-motion") {
-    const input = { input_urls: imageUrls.slice(0, 1), video_urls: videoUrls.slice(0, 1), character_orientation: orientation, mode: motionMode };
+    const input = { input_urls: imageUrls.slice(0, 1), video_urls: videoUrls.slice(0, 1), character_orientation: orientation, mode: motionMode, duration: String(duration) };
     if (prompt) input.prompt = prompt;
     payload = { model: "kling-2.6/motion-control", callBackUrl, input };
   } else {
