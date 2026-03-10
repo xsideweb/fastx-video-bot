@@ -475,7 +475,7 @@ app.post("/api/generate",
     console.log(`Server running at ${BASE_URL || "http://localhost:" + PORT}`);
     const token = process.env.TELEGRAM_BOT_TOKEN || process.env.telegram_bot_token || process.env.BOT_TOKEN;
     const baseUrl = process.env.BASE_URL;
-    if (token && baseUrl?.startsWith("https://")) {
+    if (process.env.REGISTER_WEBHOOK === "true" && token && baseUrl?.startsWith("https://")) {
       fetch(`https://api.telegram.org/bot${token}/setWebhook?url=${encodeURIComponent(baseUrl.replace(/\/$/, "") + "/webhook/telegram")}`)
         .then(r => r.json()).then(d => d.ok ? console.log("Telegram webhook set") : console.warn("setWebhook:", d.description))
         .catch(e => console.warn("setWebhook failed:", e.message));
