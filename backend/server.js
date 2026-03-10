@@ -120,23 +120,51 @@ app.post("/api/callback", async (req, res) => {
       if (Array.isArray(urls) && urls.length > 0) resultUrl = urls[0];
     } catch { /* ignore */ }
   }
-  const successFlag = code === 200 && data?.state === "success" ? 1 : 3;
-  const errorMessage = data?.failMsg || msg || (successFlag !== 1 ? "Generation failed" : "");
+  let successFlag = code === 200 && data?.state === "success" ? 1 : 3;
+  let errorMessage = data?.failMsg || msg || (successFlag !== 1 ? "Generation failed" : "");
+  let errorCode;
+  let remainingCredits;
   let galleryItem;
+  const meta = taskMeta.get(taskId);
+  const chargeUserId = meta?.userId != null && String(meta.userId) !== "" ? String(meta.userId) : null;
   if (successFlag === 1 && resultUrl) {
-    const meta = taskMeta.get(taskId);
-    if (meta?.userId != null) {
+    if (chargeUserId) {
+      try {
+        const charge = await tryDeductUserCredits(chargeUserId, Number(meta?.tokensSpent || 0));
+        if (!charge.ok) {
+          successFlag = 3;
+          errorCode = "INSUFFICIENT_CREDITS";
+          errorMessage = "Недостаточно токенов";
+          remainingCredits = charge.credits;
+        } else {
+          remainingCredits = charge.credits;
+        }
+      } catch (e) {
+        console.error("Failed to deduct credits after success:", e.message);
+        successFlag = 3;
+        errorMessage = "Не удалось списать токены";
+      }
+    }
+    if (successFlag === 1 && chargeUserId) {
       const id = uuidv4(), createdAt = new Date(meta.createdAt || Date.now());
       galleryItem = { id, url: resultUrl, prompt: meta.prompt || "", createdAt: createdAt.getTime() };
       try {
         await pool.query(
           "INSERT INTO video_generations (id, user_id, url, prompt, model, created_at) VALUES ($1,$2,$3,$4,$5,$6)",
-          [id, String(meta.userId), resultUrl, meta.prompt || "", meta.modelKey || null, createdAt]
+          [id, chargeUserId, resultUrl, meta.prompt || "", meta.modelKey || null, createdAt]
         );
       } catch (e) { console.error("Failed to insert gallery item:", e.message); }
     }
   }
-  taskResults.set(taskId, { successFlag, resultUrl: resultUrl || undefined, errorMessage: errorMessage || undefined, galleryItem });
+  taskResults.set(taskId, {
+    successFlag,
+    resultUrl: resultUrl || undefined,
+    errorMessage: errorMessage || undefined,
+    error: errorCode,
+    required: meta?.tokensSpent,
+    credits: remainingCredits,
+    galleryItem,
+  });
   taskMeta.delete(taskId);
   res.status(200).json({ status: "received" });
 });
@@ -144,7 +172,15 @@ app.post("/api/callback", async (req, res) => {
 app.get("/api/task/:taskId", (req, res) => {
   const result = taskResults.get(req.params.taskId);
   if (!result) return res.json({ successFlag: 0 });
-  res.json({ successFlag: result.successFlag, resultUrl: result.resultUrl, errorMessage: result.errorMessage, galleryItem: result.galleryItem });
+  res.json({
+    successFlag: result.successFlag,
+    resultUrl: result.resultUrl,
+    errorMessage: result.errorMessage,
+    error: result.error,
+    required: result.required,
+    credits: result.credits,
+    galleryItem: result.galleryItem,
+  });
 });
 
 app.get("/api/gallery", async (req, res) => {
@@ -226,12 +262,28 @@ const ensureUserCredits = async (userId) => {
   catch (e) { console.error(e.message); }
 };
 
+const getUserCredits = async (userId) => {
+  if (!userId) return 0;
+  await ensureUserCredits(userId);
+  const r = await pool.query("SELECT credits FROM user_credits WHERE user_id=$1", [String(userId)]);
+  return r.rows.length ? Number(r.rows[0].credits) : INITIAL_CREDITS;
+};
+
+const tryDeductUserCredits = async (userId, amount) => {
+  if (!userId) return { ok: true, credits: undefined };
+  await ensureUserCredits(userId);
+  const upd = await pool.query(
+    "UPDATE user_credits SET credits = credits - $2 WHERE user_id=$1 AND credits >= $2 RETURNING credits",
+    [String(userId), amount]
+  );
+  if (upd.rowCount === 0) return { ok: false, credits: await getUserCredits(userId) };
+  return { ok: true, credits: Number(upd.rows[0].credits) };
+};
+
 app.get("/api/credits", async (req, res) => {
   if (!req.query.userId) return res.json({ credits: 0 });
   try {
-    await ensureUserCredits(req.query.userId);
-    const r = await pool.query("SELECT credits FROM user_credits WHERE user_id=$1", [String(req.query.userId)]);
-    res.json({ credits: r.rows.length ? Number(r.rows[0].credits) : INITIAL_CREDITS });
+    res.json({ credits: await getUserCredits(req.query.userId) });
   } catch (e) { res.status(500).json({ error: "Failed" }); }
 });
 
@@ -350,12 +402,12 @@ async function handleGenerate(req, res) {
   if (modelKey === "kling-motion"   && videoIds.length === 0) return res.status(400).json({ error: "Загрузите референс видео" });
   if (modelKey === "kling-video"    && !prompt && imageIds.length === 0) return res.status(400).json({ error: "Введите промпт или загрузите изображение" });
 
-  const calcImgVidCost = (dur, snd) => dur === "10" ? (snd ? 1100 : 550) : (snd ? 550 : 275);
-  const calcMotionCost = (mode, dur) => mode === "1080p" ? (dur === "10" ? 450 : 225) : (dur === "10" ? 300 : 150);
+  const calcImgVidCost = (dur, snd) => dur === "10" ? (snd ? 176 : 88) : (snd ? 88 : 44);
+  const calcMotionCost = (mode, dur) => mode === "1080p" ? (dur === "10" ? 72 : 36) : (dur === "10" ? 48 : 24);
   const calcKling3Cost = (qual, snd, dur) => {
     const is1080p = qual === "pro";
-    if (is1080p) return snd ? (dur === "10" ? 2000 : 1000) : (dur === "10" ? 1350 : 675);
-    return snd ? (dur === "10" ? 1500 : 750) : (dur === "10" ? 1000 : 500);
+    if (is1080p) return snd ? (dur === "10" ? 319 : 160) : (dur === "10" ? 216 : 107);
+    return snd ? (dur === "10" ? 239 : 120) : (dur === "10" ? 160 : 80);
   };
   let tokensSpent = modelKey === "kling-img2vid"
     ? calcImgVidCost(duration, sound)
@@ -363,18 +415,14 @@ async function handleGenerate(req, res) {
     ? calcMotionCost(motionMode, duration)
     : calcKling3Cost(videoQuality, sound, duration);
 
-  let remainingCredits;
   if (userId !== undefined && userId !== null && String(userId) !== "") {
     const uid = String(userId);
-    await ensureUserCredits(uid);
     try {
-      const upd = await pool.query("UPDATE user_credits SET credits = credits - $2 WHERE user_id=$1 AND credits >= $2 RETURNING credits", [uid, tokensSpent]);
-      if (upd.rowCount === 0) {
-        let cur; try { const r = await pool.query("SELECT credits FROM user_credits WHERE user_id=$1", [uid]); if (r.rows.length) cur = Number(r.rows[0].credits); } catch { /* ignore */ }
-        return res.status(402).json({ error: "INSUFFICIENT_CREDITS", message: "Недостаточно токенов", required: tokensSpent, credits: cur });
+      const currentCredits = await getUserCredits(uid);
+      if (currentCredits < tokensSpent) {
+        return res.status(402).json({ error: "INSUFFICIENT_CREDITS", message: "Недостаточно токенов", required: tokensSpent, credits: currentCredits });
       }
-      remainingCredits = Number(upd.rows[0].credits);
-    } catch (e) { console.error(e.message); return res.status(500).json({ error: "Failed to deduct credits" }); }
+    } catch (e) { console.error(e.message); return res.status(500).json({ error: "Failed to validate credits" }); }
   }
 
   const callBackUrl = `${BASE_URL}/api/callback`;
@@ -406,7 +454,7 @@ async function handleGenerate(req, res) {
     }
     const taskId = data.data.taskId;
     taskMeta.set(taskId, { userId, prompt, createdAt: Date.now(), modelKey, tokensSpent });
-    res.status(200).json(typeof remainingCredits === "number" ? { taskId, credits: remainingCredits } : { taskId });
+    res.status(200).json({ taskId });
   } catch (e) { res.status(502).json({ error: "Failed to call KIE API", message: e.message }); }
 }
 

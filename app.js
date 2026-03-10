@@ -21,21 +21,21 @@
 
   // ——— Pricing helpers ———
   function calcImgVidCost(duration, sound) {
-    if (duration === '10') return sound ? 1100 : 550;
-    return sound ? 550 : 275;
+    if (duration === '10') return sound ? 176 : 88;
+    return sound ? 88 : 44;
   }
   function calcMotionCost(motionMode, duration) {
-    if (motionMode === '1080p') return duration === '10' ? 450 : 225;
-    return duration === '10' ? 300 : 150;
+    if (motionMode === '1080p') return duration === '10' ? 72 : 36;
+    return duration === '10' ? 48 : 24;
   }
   function calcKling3Cost(videoQuality, sound, duration) {
     const is1080p = videoQuality === 'pro';
     if (is1080p) {
-      if (sound) return duration === '10' ? 2000 : 1000;
-      return duration === '10' ? 1350 : 675;
+      if (sound) return duration === '10' ? 319 : 160;
+      return duration === '10' ? 216 : 107;
     }
-    if (sound) return duration === '10' ? 1500 : 750;
-    return duration === '10' ? 1000 : 500;
+    if (sound) return duration === '10' ? 239 : 120;
+    return duration === '10' ? 160 : 80;
   }
 
   // ——— Model config ———
@@ -801,8 +801,13 @@
         const r = await fetch(apiUrl('/api/task/' + encodeURIComponent(taskId)));
         if (!r.ok) { setTimeout(poll, 5000); return; }
         const data = await r.json();
+        if (typeof data.credits === 'number') { credits = Math.max(0, data.credits); renderCredits(); }
         if (data.successFlag === 1) { finishGenerate(data.resultUrl, data.galleryItem); return; }
-        if (data.successFlag === 2 || data.successFlag === 3) { showError(data.errorMessage || (currentLang === 'en' ? 'Generation failed' : 'Генерация не удалась')); return; }
+        if (data.successFlag === 2 || data.successFlag === 3) {
+          if (data.error === 'INSUFFICIENT_CREDITS') { showInsufficientCreditsPopup(typeof data.required === 'number' ? data.required : cost); return; }
+          showError(data.errorMessage || (currentLang === 'en' ? 'Generation failed' : 'Генерация не удалась'));
+          return;
+        }
         setTimeout(poll, 5000);
       } catch { setTimeout(poll, 5000); }
     };
