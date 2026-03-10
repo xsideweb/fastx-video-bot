@@ -323,11 +323,11 @@ app.post("/webhook/telegram", (req, res) => {
   if (!token) return res.status(200).send();
   const baseUrl = "https://api.telegram.org/bot" + token;
 
-  // URLs for the two Mini Apps shown on /start
-  // APP2_URL can point to a second app (e.g. image-generation service).
-  // If not set, only the video app button is shown.
-  const videoAppUrl = (process.env.BASE_URL || "").replace(/\/$/, "");
-  const imageAppUrl = (process.env.APP2_URL  || "").replace(/\/$/, "");
+  // URLs for Mini Apps shown on /start.
+  // Keep compatibility with both old and new env var names.
+  const videoAppUrl = (process.env.APP_VIDEO_URL || process.env.BASE_URL || "").replace(/\/$/, "");
+  const imageAppUrl = (process.env.APP_IMAGE_URL || process.env.APP2_URL || "").replace(/\/$/, "");
+  const profileAppUrl = (process.env.APP_PROFILE_URL || process.env.APP3_URL || "").replace(/\/$/, "");
 
   (async () => {
     // ——— /start: send app launcher buttons ———
@@ -337,10 +337,13 @@ app.post("/webhook/telegram", (req, res) => {
       // Build inline keyboard rows
       const rows = [];
       if (videoAppUrl) {
-        rows.push([{ text: "🎬 Генерация видео", web_app: { url: videoAppUrl } }]);
+        rows.push([{ text: "🎬 AI Видео", web_app: { url: videoAppUrl } }]);
       }
       if (imageAppUrl) {
-        rows.push([{ text: "🖼️ Генерация изображений", web_app: { url: imageAppUrl } }]);
+        rows.push([{ text: "🖼 AI Фото", web_app: { url: imageAppUrl } }]);
+      }
+      if (profileAppUrl) {
+        rows.push([{ text: "👤 Профиль", web_app: { url: profileAppUrl } }]);
       }
 
       const body = {
@@ -403,7 +406,7 @@ async function handleGenerate(req, res) {
   if (modelKey === "kling-video"    && !prompt && imageIds.length === 0) return res.status(400).json({ error: "Введите промпт или загрузите изображение" });
 
   const calcImgVidCost = (dur, snd) => dur === "10" ? (snd ? 176 : 88) : (snd ? 88 : 44);
-  const calcMotionCost = (mode, dur) => mode === "1080p" ? (dur === "10" ? 72 : 36) : (dur === "10" ? 48 : 24);
+  const calcMotionCost = (mode, dur) => mode === "1080p" ? (dur === "10" ? 72 : 36) : (dur === "10" ? 72 : 36);
   const calcKling3Cost = (qual, snd, dur) => {
     const is1080p = qual === "pro";
     if (is1080p) return snd ? (dur === "10" ? 319 : 160) : (dur === "10" ? 216 : 107);

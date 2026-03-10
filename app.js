@@ -26,7 +26,7 @@
   }
   function calcMotionCost(motionMode, duration) {
     if (motionMode === '1080p') return duration === '10' ? 72 : 36;
-    return duration === '10' ? 48 : 24;
+    return duration === '10' ? 72 : 36;
   }
   function calcKling3Cost(videoQuality, sound, duration) {
     const is1080p = videoQuality === 'pro';
