@@ -406,7 +406,7 @@ async function handleGenerate(req, res) {
   if (modelKey === "kling-video"    && !prompt && imageIds.length === 0) return res.status(400).json({ error: "Введите промпт или загрузите изображение" });
 
   const calcImgVidCost = (dur, snd) => dur === "10" ? (snd ? 176 : 88) : (snd ? 88 : 44);
-  const calcMotionCost = (mode, dur) => mode === "1080p" ? (dur === "10" ? 72 : 36) : (dur === "10" ? 72 : 36);
+  const calcMotionCost = (mode, dur) => mode === "1080p" ? (dur === "10" ? 108 : 54) : (dur === "10" ? 72 : 36);
   const calcKling3Cost = (qual, snd, dur) => {
     const is1080p = qual === "pro";
     if (is1080p) return snd ? (dur === "10" ? 319 : 160) : (dur === "10" ? 216 : 107);
